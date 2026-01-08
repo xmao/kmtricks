@@ -26,8 +26,11 @@
 #include <kmtricks/io/lz4_stream.hpp>
 #include <kmtricks/exceptions.hpp>
 #include <kmtricks/utils.hpp>
+#include <kmtricks/alphabet.hpp>
+#include <kmtricks/io/kff_file.hpp>
 
-#define KM_IO_VERSION 0x0
+#define KM_IO_VERSION 0x1
+#define KM_IO_VERSION_ALPHABET 0x1
 
 namespace km {
 
@@ -63,13 +66,29 @@ const std::map<KM_FILE, uint64_t> MAGICS = {
 
 inline KM_FILE get_km_file_type(const std::string& path)
 {
+  uint32_t kffp_magic = 0;
   uint64_t km_base;
   uint64_t km_file;
+  uint32_t km_version = 0;
+  bool compressed = false;
+  uint8_t alphabet_id = 0;
+  uint8_t alphabet_bits_per_symbol = 0;
   std::ifstream in(path, std::ios::in | std::ios::binary); check_fstream_good(path, in);
+  in.read(reinterpret_cast<char*>(&kffp_magic), sizeof(kffp_magic));
+  if (kffp_magic == KFFP_MAGIC)
+    return KM_FILE::KFF;
+  in.clear();
+  in.seekg(0);
   in.read(reinterpret_cast<char*>(&km_base), sizeof(km_base));
   if (km_base != MAGICS.at(KM_FILE::BASE))
     throw IOError("Not a kmtricks file.");
-  in.ignore(5);
+  in.read(reinterpret_cast<char*>(&km_version), sizeof(km_version));
+  in.read(reinterpret_cast<char*>(&compressed), sizeof(compressed));
+  if (km_version >= KM_IO_VERSION_ALPHABET)
+  {
+    in.read(reinterpret_cast<char*>(&alphabet_id), sizeof(alphabet_id));
+    in.read(reinterpret_cast<char*>(&alphabet_bits_per_symbol), sizeof(alphabet_bits_per_symbol));
+  }
   in.read(reinterpret_cast<char*>(&km_file), sizeof(km_file));
 
   if (km_file == MAGICS.at(KM_FILE::KMER))
@@ -136,6 +155,11 @@ protected:
     stream->write(reinterpret_cast<char*>(&km_magic), sizeof(km_magic));
     stream->write(reinterpret_cast<char*>(&km_version), sizeof(km_version));
     stream->write(reinterpret_cast<char*>(&compressed), sizeof(compressed));
+    if (km_version >= KM_IO_VERSION_ALPHABET)
+    {
+      stream->write(reinterpret_cast<char*>(&alphabet_id), sizeof(alphabet_id));
+      stream->write(reinterpret_cast<char*>(&alphabet_bits_per_symbol), sizeof(alphabet_bits_per_symbol));
+    }
   }
 
   void _deserialize(std::istream* stream)
@@ -143,6 +167,16 @@ protected:
     stream->read(reinterpret_cast<char*>(&km_magic), sizeof(km_magic));
     stream->read(reinterpret_cast<char*>(&km_version), sizeof(km_version));
     stream->read(reinterpret_cast<char*>(&compressed), sizeof(compressed));
+    if (km_version >= KM_IO_VERSION_ALPHABET)
+    {
+      stream->read(reinterpret_cast<char*>(&alphabet_id), sizeof(alphabet_id));
+      stream->read(reinterpret_cast<char*>(&alphabet_bits_per_symbol), sizeof(alphabet_bits_per_symbol));
+    }
+    else
+    {
+      alphabet_id = static_cast<uint8_t>(Alphabet::DNA);
+      alphabet_bits_per_symbol = km::alphabet_bits(Alphabet::DNA);
+    }
   }
 
   void _sanity_check()
@@ -155,6 +189,8 @@ public:
   uint64_t km_magic {MAGICS.at(KM_FILE::BASE)};
   uint32_t km_version {KM_IO_VERSION};
   bool compressed;
+  uint8_t alphabet_id {static_cast<uint8_t>(Alphabet::DNA)};
+  uint8_t alphabet_bits_per_symbol {km::alphabet_bits(Alphabet::DNA)};
 };
 
 template<typename header_t,

@@ -41,6 +41,8 @@
 #include <kmtricks/progress.hpp>
 #include <kmtricks/signals.hpp>
 #include <kmtricks/matrix.hpp>
+#include <kmtricks/alphabet.hpp>
+#include <kmtricks/protein.hpp>
 
 #ifdef WITH_PLUGIN
 #include <kmtricks/plugin_manager.hpp>
@@ -50,21 +52,37 @@
 namespace km {
 
 template<size_t MAX_K>
+inline Alphabet init_alphabet(km_options_t options)
+{
+  Alphabet alphabet = alphabet_from_string(options->alphabet);
+  Kmer<MAX_K>::set_alphabet(alphabet);
+  return alphabet;
+}
+
+template<size_t MAX_K>
 struct main_all
 {
   void operator()(km_options_t options)
   {
     spdlog::info("Run with {} implementation", Kmer<MAX_K>::name());
+    Alphabet alphabet = init_alphabet<MAX_K>(options);
     all_options_t opt = std::static_pointer_cast<struct all_options>(options);
     spdlog::debug(opt->display());
     opt->sanity_check();
-    KmDir::get().init(opt->dir, opt->fof, true);
-    opt->dump(KmDir::get().m_options);
 
 #ifdef WITH_PLUGIN
     if (opt->use_plugin)
       PluginManager<IMergePlugin>::get().init(opt->plugin, opt->plugin_config, MAX_K);
 #endif
+
+    if (alphabet == Alphabet::PROTEIN)
+    {
+      run_protein_all<MAX_K, DMAX_C>(opt);
+      return;
+    }
+
+    KmDir::get().init(opt->dir, opt->fof, true);
+    opt->dump(KmDir::get().m_options);
 
     TaskScheduler<MAX_K, DMAX_C> scheduler(opt);
     scheduler.execute();
@@ -77,8 +95,14 @@ struct main_repart
   void operator()(km_options_t options)
   {
     spdlog::info("Run with {} implementation", Kmer<MAX_K>::name());
+    Alphabet alphabet = init_alphabet<MAX_K>(options);
     repart_options_t opt = std::static_pointer_cast<struct repart_options>(options);
     spdlog::debug(opt->display());
+    if (alphabet == Alphabet::PROTEIN)
+    {
+      run_protein_repart<MAX_K>(opt);
+      return;
+    }
     KmDir::get().init(opt->dir, opt->fof, true);
     IProperties* props = get_config_properties(opt->kmer_size,
                                           opt->minim_size,
@@ -105,8 +129,14 @@ struct main_superk
   void operator()(km_options_t options)
   {
     spdlog::info("Run with {} implementation", Kmer<MAX_K>::name());
+    Alphabet alphabet = init_alphabet<MAX_K>(options);
     superk_options_t opt = std::static_pointer_cast<struct superk_options>(options);
     spdlog::debug(opt->display());
+    if (alphabet == Alphabet::PROTEIN)
+    {
+      run_protein_superk<MAX_K>(opt);
+      return;
+    }
     KmDir::get().init(opt->dir, "", false);
 
     Storage* config_storage = StorageFactory(STORAGE_FILE).load(KmDir::get().m_config_storage);
@@ -139,8 +169,14 @@ struct main_count
   void operator()(km_options_t options)
   {
     spdlog::info("Run with {} implementation", Kmer<MAX_K>::name());
+    Alphabet alphabet = init_alphabet<MAX_K>(options);
     count_options_t opt = std::static_pointer_cast<struct count_options>(options);
     spdlog::debug(opt->display());
+    if (alphabet == Alphabet::PROTEIN)
+    {
+      run_protein_count<MAX_K, DMAX_C>(opt);
+      return;
+    }
     KmDir::get().init(opt->dir, "", false);
 
     Storage* config_storage = StorageFactory(STORAGE_FILE).load(KmDir::get().m_config_storage);
@@ -210,7 +246,7 @@ struct main_count
     if (opt->hist)
     {
       hist->merge_clones();
-      HistWriter(KmDir::get().get_hist_path(opt->id), *hist, false);
+      HistWriter(KmDir::get().get_hist_path(opt->id), *hist, false, Kmer<MAX_K>::alphabet());
     }
   }
 };
@@ -221,6 +257,7 @@ struct main_merge
   void operator()(km_options_t options)
   {
     spdlog::info("Run with {} implementation", Kmer<MAX_K>::name());
+    init_alphabet<MAX_K>(options);
     merge_options_t opt = std::static_pointer_cast<struct merge_options>(options);
     spdlog::debug(opt->display());
     KmDir::get().init(opt->dir, "", false);
@@ -274,6 +311,7 @@ struct main_dump
   void operator()(km_options_t options)
   {
     spdlog::info("Run with {} implementation", Kmer<MAX_K>::name());
+    init_alphabet<MAX_K>(options);
     dump_options_t opt = std::static_pointer_cast<struct dump_options>(options);
     spdlog::debug(opt->display());
 
@@ -356,6 +394,64 @@ struct main_dump
         hr.write_as_text(out, false);
       }
     }
+    else if (km_file == KM_FILE::VECTOR)
+    {
+      BitVectorReader br(opt->input);
+      const uint64_t bits = br.infos().bits;
+      std::vector<uint8_t> vec(NBYTES(bits), 0);
+      br.read(vec);
+      auto dump_bits = [&](std::ostream& out) {
+        for (uint64_t i = 0; i < bits; ++i)
+          out << (BITCHECK(vec, i) ? '1' : '0');
+        out << "\n";
+      };
+      if (opt->output == "stdout")
+        dump_bits(std::cout);
+      else
+      {
+        std::ofstream out(opt->output); check_fstream_good(opt->output, out);
+        dump_bits(out);
+      }
+    }
+    else if (km_file == KM_FILE::KFF)
+    {
+      KffReader kr(opt->input, 0);
+      if (opt->output == "stdout")
+        while (auto kmer = kr.template read<MAX_K>())
+          std::cout << kmer->to_string() << "\n";
+      else
+      {
+        std::ofstream out(opt->output); check_fstream_good(opt->output, out);
+        while (auto kmer = kr.template read<MAX_K>())
+          out << kmer->to_string() << "\n";
+      }
+    }
+    else if (km_file == KM_FILE::BITMATRIX)
+    {
+      VectorMatrixReader vmr(opt->input);
+      const uint64_t bits = vmr.infos().bits;
+      const uint64_t first = vmr.infos().first;
+      const uint64_t window = vmr.infos().window;
+      std::vector<uint8_t> vec(NBYTES(bits), 0);
+      auto dump_rows = [&](std::ostream& out) {
+        for (uint64_t row = 0; row < window; ++row)
+        {
+          if (!vmr.read(vec))
+            break;
+          out << std::to_string(first + row) << " ";
+          for (uint64_t i = 0; i < bits; ++i)
+            out << (BITCHECK(vec, i) ? '1' : '0');
+          out << "\n";
+        }
+      };
+      if (opt->output == "stdout")
+        dump_rows(std::cout);
+      else
+      {
+        std::ofstream out(opt->output); check_fstream_good(opt->output, out);
+        dump_rows(out);
+      }
+    }
     else
     {
       throw IOError(fmt::format("KM_FILE::{} doesn't support text conversion.",
@@ -370,6 +466,7 @@ struct main_combine
   void operator()(km_options_t options)
   {
     spdlog::info("Run with {} implementation", Kmer<MAX_K>::name());
+    init_alphabet<MAX_K>(options);
     combine_options_t opt = std::static_pointer_cast<struct combine_options>(options);
     spdlog::debug(opt->display());
 
@@ -440,6 +537,7 @@ struct main_agg
   void operator()(km_options_t options)
   {
     spdlog::info("Run with {} implementation", Kmer<MAX_K>::name());
+    init_alphabet<MAX_K>(options);
     agg_options_t opt = std::static_pointer_cast<struct agg_options>(options);
     spdlog::debug(opt->display());
 
@@ -608,6 +706,7 @@ struct main_filter
   void operator()(km_options_t options)
   {
     spdlog::info("Run with {} implementation", Kmer<MAX_K>::name());
+    init_alphabet<MAX_K>(options);
     filter_options_t opt = std::static_pointer_cast<struct filter_options>(options);
 
     KmDir::get().init(opt->dir, "", false);

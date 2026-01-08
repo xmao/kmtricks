@@ -21,12 +21,15 @@
 #include <string>
 #include <memory>
 #include <optional>
+#include <fstream>
+#include <vector>
 
 // ext
 #include <kff_io.hpp>
 
 // int
 #include <kmtricks/kmer.hpp>
+#include <kmtricks/alphabet.hpp>
 
 namespace km {
 
@@ -34,23 +37,48 @@ using kff_t = std::unique_ptr<Kff_file>;
 using kff_raw_t = std::unique_ptr<Section_Raw>;
 using kff_min_t = std::unique_ptr<Section_Minimizer>;
 
+constexpr uint32_t KFFP_MAGIC = 0x504B4D4B; // "KMKP"
+constexpr uint32_t KFFP_VERSION = 1;
+
 template<size_t MAX_C>
 class KffWriter
 {
 public:
-  KffWriter(const std::string& path, size_t kmer_size)
-    : m_kmer_size(kmer_size)
+  KffWriter(const std::string& path, size_t kmer_size, Alphabet alphabet = Alphabet::DNA)
+    : m_kmer_size(kmer_size), m_alphabet(alphabet)
   {
-    m_kff_file = std::make_unique<Kff_file>(path, "w");
-    uint8_t encoding[] = {0, 1, 3, 2};
-    m_kff_file->write_encoding(encoding);
+    if (alphabet == Alphabet::PROTEIN)
+    {
+      m_is_protein = true;
+      m_bits_per_symbol = alphabet_bits(alphabet);
+      m_bytes_per_kmer = (m_kmer_size * m_bits_per_symbol + 7) / 8;
+      m_protein_out.open(path, std::ios::binary | std::ios::out);
+      if (!m_protein_out.good())
+        throw std::runtime_error("Unable to open " + path);
+      m_protein_out.write(reinterpret_cast<const char*>(&KFFP_MAGIC), sizeof(KFFP_MAGIC));
+      m_protein_out.write(reinterpret_cast<const char*>(&KFFP_VERSION), sizeof(KFFP_VERSION));
+      m_protein_out.write(reinterpret_cast<const char*>(&m_kmer_size), sizeof(m_kmer_size));
+      uint32_t count_size = sizeof(typename selectC<MAX_C>::type);
+      m_protein_out.write(reinterpret_cast<const char*>(&count_size), sizeof(count_size));
+      uint8_t alphabet_id = static_cast<uint8_t>(alphabet);
+      m_protein_out.write(reinterpret_cast<const char*>(&alphabet_id), sizeof(alphabet_id));
+      m_protein_out.write(reinterpret_cast<const char*>(&m_bits_per_symbol), sizeof(m_bits_per_symbol));
+    }
+    else
+    {
+      m_kff_file = std::make_unique<Kff_file>(path, "w");
+      uint8_t encoding[] = {0, 1, 3, 2};
+      m_kff_file->write_encoding(encoding);
 
-    Section_GV sgv(m_kff_file.get());
-    sgv.write_var("k", m_kmer_size);
-    sgv.write_var("max", 1);
-    sgv.write_var("data_size", sizeof(typename selectC<MAX_C>::type));
-    sgv.close();
-    m_kff_sec = std::make_unique<Section_Raw>(m_kff_file.get());
+      Section_GV sgv(m_kff_file.get());
+      sgv.write_var("k", m_kmer_size);
+      sgv.write_var("kmtricks_alphabet", static_cast<uint64_t>(alphabet));
+      sgv.write_var("kmtricks_alphabet_bits", static_cast<uint64_t>(alphabet_bits(alphabet)));
+      sgv.write_var("max", 1);
+      sgv.write_var("data_size", sizeof(typename selectC<MAX_C>::type));
+      sgv.close();
+      m_kff_sec = std::make_unique<Section_Raw>(m_kff_file.get());
+    }
   }
 
   template<size_t MAX_K>
@@ -66,14 +94,30 @@ public:
       u8from32(counts, count);
 
     m_kmer = kmer.to_string();
-    encode_sequence(encoded);
-    m_kff_sec->write_compacted_sequence(encoded, m_kmer_size, counts);
+    if (m_is_protein)
+    {
+      auto packed = encode_protein_sequence(m_kmer);
+      m_protein_out.write(reinterpret_cast<const char*>(packed.data()), packed.size());
+      m_protein_out.write(reinterpret_cast<const char*>(counts), sizeof(count));
+    }
+    else
+    {
+      encode_sequence(encoded);
+      m_kff_sec->write_compacted_sequence(encoded, m_kmer_size, counts);
+    }
   }
 
   void close()
   {
-    m_kff_sec->close();
-    m_kff_file->close();
+    if (m_is_protein)
+    {
+      m_protein_out.close();
+    }
+    else
+    {
+      m_kff_sec->close();
+      m_kff_file->close();
+    }
   }
 
   uint8_t uint8_packing(std::string sequence)
@@ -106,6 +150,29 @@ public:
   }
 
 private:
+  std::vector<uint8_t> encode_protein_sequence(const std::string& sequence) const
+  {
+    std::vector<uint8_t> packed(m_bytes_per_kmer, 0);
+    uint64_t buffer = 0;
+    uint8_t bits = 0;
+    size_t out_idx = 0;
+    for (char c : sequence)
+    {
+      buffer = (buffer << m_bits_per_symbol) | protein_to_code(static_cast<unsigned char>(c));
+      bits += m_bits_per_symbol;
+      while (bits >= 8 && out_idx < packed.size())
+      {
+        bits -= 8;
+        packed[out_idx++] = static_cast<uint8_t>((buffer >> bits) & 0xFF);
+      }
+    }
+    if (bits && out_idx < packed.size())
+    {
+      packed[out_idx] = static_cast<uint8_t>((buffer << (8 - bits)) & 0xFF);
+    }
+    return packed;
+  }
+
   void u8from32(uint8_t b[4], uint32_t u32)
   {
     b[3] = (uint8_t)u32;
@@ -125,6 +192,11 @@ private:
   kff_raw_t m_kff_sec {nullptr};
   size_t m_kmer_size;
   std::string m_kmer;
+  bool m_is_protein {false};
+  Alphabet m_alphabet {Alphabet::DNA};
+  uint8_t m_bits_per_symbol {2};
+  size_t m_bytes_per_kmer {0};
+  std::ofstream m_protein_out;
 };
 
 template<size_t MAX_C>
@@ -136,9 +208,12 @@ template<size_t MAX_C>
 class KffSkWriter
 {
 public:
-  KffSkWriter(const std::string& path, size_t kmer_size, size_t minim_size)
+  KffSkWriter(const std::string& path, size_t kmer_size, size_t minim_size,
+              Alphabet alphabet = Alphabet::DNA)
     : m_kmer_size(kmer_size), m_minim_size(minim_size)
   {
+    if (alphabet == Alphabet::PROTEIN)
+      throw ConfigError("Protein kff superk output is not supported.");
     m_kff_file = std::make_unique<Kff_file>(path, "w");
     uint8_t encoding[] = {0, 1, 3, 2};
     m_kff_file->write_encoding(encoding);
@@ -146,6 +221,8 @@ public:
     Section_GV sgv(m_kff_file.get());
     sgv.write_var("k", m_kmer_size);
     sgv.write_var("m", m_minim_size);
+    sgv.write_var("kmtricks_alphabet", static_cast<uint64_t>(alphabet));
+    sgv.write_var("kmtricks_alphabet_bits", static_cast<uint64_t>(alphabet_bits(alphabet)));
     sgv.write_var("max", 255);
     sgv.write_var("data_size", 1);
     sgv.close();
@@ -216,15 +293,37 @@ class KffReader
 public:
   KffReader(const std::string& path, size_t kmer_size)
   {
-    m_kff_reader = std::make_unique<Kff_reader>(path);
-    m_kmer_size = kmer_size;
-    m_data_size = 0;
-    for (int i=0; i<256; i++)
+    std::ifstream probe(path, std::ios::binary);
+    uint32_t magic = 0;
+    if (probe.good())
+      probe.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    if (magic == KFFP_MAGIC)
     {
-      for (int j=0; j<4; j++)
+      m_is_protein = true;
+      uint32_t version = 0;
+      probe.read(reinterpret_cast<char*>(&version), sizeof(version));
+      probe.read(reinterpret_cast<char*>(&m_kmer_size), sizeof(m_kmer_size));
+      probe.read(reinterpret_cast<char*>(&m_count_size), sizeof(m_count_size));
+      uint8_t alphabet_id = 0;
+      probe.read(reinterpret_cast<char*>(&alphabet_id), sizeof(alphabet_id));
+      m_alphabet = alphabet_from_id(alphabet_id);
+      probe.read(reinterpret_cast<char*>(&m_bits_per_symbol), sizeof(m_bits_per_symbol));
+      m_bytes_per_kmer = (m_kmer_size * m_bits_per_symbol + 7) / 8;
+      m_protein_in = std::move(probe);
+      m_protein_buffer.resize(m_bytes_per_kmer);
+    }
+    else
+    {
+      m_kff_reader = std::make_unique<Kff_reader>(path);
+      m_kmer_size = kmer_size;
+      m_data_size = 0;
+      for (int i=0; i<256; i++)
       {
-        uint8_t n = (i>>(2*j)) & 0b11;
-        m_lookup[i] = nt[n] + m_lookup[i];
+        for (int j=0; j<4; j++)
+        {
+          uint8_t n = (i>>(2*j)) & 0b11;
+          m_lookup[i] = nt[n] + m_lookup[i];
+        }
       }
     }
   }
@@ -234,15 +333,47 @@ public:
   {
     static Kmer<MAX_K> kmer;
     kmer.set_k(m_kmer_size);
-    if (m_kff_reader->has_next())
+    if (m_is_protein)
     {
-      m_kff_reader->next_kmer(m_buffer, m_data);
-      return Kmer<MAX_K>(to_string());
+      Kmer<MAX_K>::set_alphabet(m_alphabet);
+      if (!m_protein_in.read(reinterpret_cast<char*>(m_protein_buffer.data()), m_bytes_per_kmer))
+        return std::nullopt;
+      if (!m_protein_in.read(reinterpret_cast<char*>(m_count_buffer.data()), m_count_size))
+        return std::nullopt;
+      return Kmer<MAX_K>(decode_protein());
     }
-    return std::nullopt;
+    else
+    {
+      if (m_kff_reader->has_next())
+      {
+        m_kff_reader->next_kmer(m_buffer, m_data);
+        return Kmer<MAX_K>(to_string());
+      }
+      return std::nullopt;
+    }
   }
 
 private:
+  std::string decode_protein() const
+  {
+    std::string seq;
+    seq.reserve(m_kmer_size);
+    uint64_t buffer = 0;
+    uint8_t bits = 0;
+    for (auto byte : m_protein_buffer)
+    {
+      buffer = (buffer << 8) | byte;
+      bits += 8;
+      while (bits >= m_bits_per_symbol && seq.size() < m_kmer_size)
+      {
+        bits -= m_bits_per_symbol;
+        uint8_t code = static_cast<uint8_t>((buffer >> bits) & ((1ULL << m_bits_per_symbol) - 1));
+        seq.push_back(code_to_char(Alphabet::PROTEIN, code));
+      }
+    }
+    return seq;
+  }
+
   std::string to_string()
   {
     size_t size = m_kmer_size % 4 == 0 ? m_kmer_size / 4 : m_kmer_size / 4 + 1;
@@ -266,6 +397,14 @@ private:
   uint8_t* m_buffer {nullptr};
   uint8_t* m_data {nullptr};
   std::string m_lookup[256];
+  bool m_is_protein {false};
+  std::ifstream m_protein_in;
+  size_t m_bytes_per_kmer {0};
+  uint8_t m_bits_per_symbol {0};
+  uint32_t m_count_size {0};
+  Alphabet m_alphabet {Alphabet::DNA};
+  std::vector<uint8_t> m_protein_buffer;
+  std::array<uint8_t, 4> m_count_buffer {};
 };
 
 using kff_r_t = std::unique_ptr<KffReader>;

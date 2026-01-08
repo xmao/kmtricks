@@ -14,15 +14,15 @@ TEST(kmer, set_from_str)
   std::string d = km::random_dna_seq(32);
 
   km::Kmer<32> kmer(a);
-  EXPECT_EQ(kmer.name(), "Kmer<32> - uint64_t");
+  EXPECT_EQ(kmer.name(), "Kmer<32> - uint64_t[3]");
   EXPECT_EQ(a , kmer.to_string());
 
   km::Kmer<64> kmer2(b);
-  EXPECT_EQ(kmer2.name(), "Kmer<64> - __uint128_t");
+  EXPECT_EQ(kmer2.name(), "Kmer<64> - uint64_t[5]");
   EXPECT_EQ(b , kmer2.to_string());
 
   km::Kmer<92> kmer3(c);
-  EXPECT_EQ(kmer3.name(), "Kmer<92> - uint64_t[3]");
+  EXPECT_EQ(kmer3.name(), "Kmer<92> - uint64_t[8]");
   EXPECT_EQ(c , kmer3.to_string());
 
   km::Kmer<32> kmer4(d);

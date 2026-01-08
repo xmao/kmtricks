@@ -20,6 +20,7 @@
 #include <kmtricks/io/io_common.hpp>
 #include <kmtricks/kmer.hpp>
 #include <kmtricks/utils.hpp>
+#include <kmtricks/exceptions.hpp>
 
 namespace km {
 
@@ -76,12 +77,15 @@ public:
              uint32_t count_size,
              uint32_t id,
              uint32_t partition,
-             bool lz4)
+             bool lz4,
+             Alphabet alphabet = Alphabet::DNA)
     : IFile<KmerFileHeader, std::ostream, buf_size>(path, std::ios::out | std::ios::binary)
   {
     this->m_header.compressed = lz4;
+    this->m_header.alphabet_id = static_cast<uint8_t>(alphabet);
+    this->m_header.alphabet_bits_per_symbol = alphabet_bits(alphabet);
     this->m_header.kmer_size = kmer_size;
-    this->m_header.kmer_slots = (kmer_size + 31) / 32;
+    this->m_header.kmer_slots = kmer_slots(kmer_size, alphabet);
     this->m_header.count_slots = count_size;
     this->m_header.id = id;
     this->m_header.partition = partition;
@@ -127,6 +131,7 @@ public:
   template<size_t MAX_K, size_t MAX_C>
   bool read(Kmer<MAX_K>& kmer, typename selectC<MAX_C>::type& count)
   {
+    Kmer<MAX_K>::set_alphabet(alphabet_from_id(this->m_header.alphabet_id));
     this->m_second_layer->read(reinterpret_cast<char*>(kmer.get_data64_unsafe()),
                                this->m_header.kmer_slots*8);
     this->m_second_layer->read(reinterpret_cast<char*>(&count), this->m_header.count_slots);
@@ -139,6 +144,7 @@ public:
   template<size_t MAX_K, size_t MAX_C>
   void write_as_text(std::ostream& stream)
   {
+    Kmer<MAX_K>::set_alphabet(alphabet_from_id(this->m_header.alphabet_id));
     Kmer<MAX_K> kmer; kmer.set_k(this->m_header.kmer_size);
     typename selectC<MAX_C>::type count = 0;
     while (read<MAX_K, MAX_C>(kmer, count))
@@ -150,6 +156,7 @@ public:
   template<size_t MAX_K, size_t MAX_C>
   void write_kmers(std::ostream& stream)
   {
+    Kmer<MAX_K>::set_alphabet(alphabet_from_id(this->m_header.alphabet_id));
     Kmer<MAX_K> kmer; kmer.set_k(this->m_header.kmer_size);
     typename selectC<MAX_C>::type count = 0;
     while (read<MAX_K, MAX_C>(kmer, count))
@@ -198,6 +205,14 @@ public:
     for (auto& path: m_paths)
       m_input_streams.push_back(std::make_shared<KmerReader<8192>>(path));
     m_size = m_paths.size();
+    if (!m_input_streams.empty())
+    {
+      uint8_t alphabet_id = m_input_streams[0]->infos().alphabet_id;
+      for (auto& stream : m_input_streams)
+        if (stream->infos().alphabet_id != alphabet_id)
+          throw PipelineError("Alphabet mismatch across k-mer inputs.");
+      Kmer<MAX_K>::set_alphabet(alphabet_from_id(alphabet_id));
+    }
   }
 
   void init_state()
@@ -246,7 +261,8 @@ public:
 
   void write_as_bin(const std::string& path, bool compressed)
   {
-    KmerWriter<8192> kw(path, m_kmer_size, requiredC<MAX_C>::value/8, 0, -1, compressed);
+    KmerWriter<8192> kw(path, m_kmer_size, requiredC<MAX_C>::value/8, 0, -1, compressed,
+                        Kmer<MAX_K>::alphabet());
     while (next())
     {
       kw.template write<MAX_K, MAX_C>(m_current, m_counts);
@@ -319,7 +335,14 @@ public:
 
   void write_as_bin(const std::string& path, bool compressed)
   {
-    KmerWriter<8192> kw(path, m_kmer_size, requiredC<MAX_C>::value/8, 0, -1, compressed);
+    KmerReader<8192> first_reader(m_paths[0]);
+    uint8_t alphabet_id = first_reader.infos().alphabet_id;
+    for (auto& p : m_paths)
+      if (KmerReader<8192>(p).infos().alphabet_id != alphabet_id)
+        throw PipelineError("Alphabet mismatch across k-mer inputs.");
+    Alphabet alphabet = alphabet_from_id(alphabet_id);
+    Kmer<MAX_K>::set_alphabet(alphabet);
+    KmerWriter<8192> kw(path, m_kmer_size, requiredC<MAX_C>::value/8, 0, -1, compressed, alphabet);
     for (auto& p : m_paths)
     {
       KmerReader<8192> kr(p);
@@ -367,4 +390,3 @@ private:
 };
 
 };
-

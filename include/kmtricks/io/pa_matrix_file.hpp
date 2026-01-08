@@ -20,6 +20,7 @@
 #include <kmtricks/io/io_common.hpp>
 #include <kmtricks/kmer.hpp>
 #include <kmtricks/utils.hpp>
+#include <kmtricks/exceptions.hpp>
 
 namespace km {
 
@@ -79,12 +80,15 @@ public:
                uint32_t bits,
                uint32_t id,
                uint32_t partition,
-               bool lz4)
+               bool lz4,
+               Alphabet alphabet = Alphabet::DNA)
     : IFile<PAMatrixFileHeader, std::ostream, buf_size>(path, std::ios::out | std::ios::binary)
   {
     this->m_header.compressed = lz4;
+    this->m_header.alphabet_id = static_cast<uint8_t>(alphabet);
+    this->m_header.alphabet_bits_per_symbol = alphabet_bits(alphabet);
     this->m_header.kmer_size = kmer_size;
-    this->m_header.kmer_slots = (kmer_size + 31) / 32;
+    this->m_header.kmer_slots = kmer_slots(kmer_size, alphabet);
     this->m_header.bits = bits;
     this->m_header.bytes = NBYTES(bits);
     this->m_header.id = id;
@@ -121,6 +125,7 @@ public:
   template<size_t MAX_K>
   bool read(Kmer<MAX_K>& kmer, std::vector<uint8_t>& vec)
   {
+    Kmer<MAX_K>::set_alphabet(alphabet_from_id(this->m_header.alphabet_id));
     this->m_second_layer->read(reinterpret_cast<char*>(kmer.get_data64_unsafe()),
                                 this->m_header.kmer_slots*8);
     this->m_second_layer->read(reinterpret_cast<char*>(vec.data()),
@@ -133,6 +138,7 @@ public:
   template<size_t MAX_K>
   void write_as_text(std::ostream& stream)
   {
+    Kmer<MAX_K>::set_alphabet(alphabet_from_id(this->m_header.alphabet_id));
     Kmer<MAX_K> kmer; kmer.set_k(this->m_header.kmer_size);
     std::vector<uint8_t> vec(this->m_header.bytes);
     while (read<MAX_K>(kmer, vec))
@@ -157,6 +163,7 @@ public:
   template<size_t MAX_K>
   void write_kmers(std::ostream& stream)
   {
+    Kmer<MAX_K>::set_alphabet(alphabet_from_id(this->m_header.alphabet_id));
     Kmer<MAX_K> kmer; kmer.set_k(this->m_header.kmer_size);
     std::vector<uint8_t> vec(this->m_header.bytes);
 
@@ -219,10 +226,13 @@ public:
                uint32_t bits,
                uint32_t id,
                uint32_t partition,
-               bool lz4)
+               bool lz4,
+               Alphabet alphabet = Alphabet::DNA)
     : IFile<PAHashMatrixFileHeader, std::ostream, buf_size>(path, std::ios::out | std::ios::binary)
   {
     this->m_header.compressed = lz4;
+    this->m_header.alphabet_id = static_cast<uint8_t>(alphabet);
+    this->m_header.alphabet_bits_per_symbol = alphabet_bits(alphabet);
     this->m_header.bits = bits;
     this->m_header.bytes = NBYTES(bits);
     this->m_header.id = id;
@@ -325,6 +335,14 @@ public:
     for (auto& path: m_paths)
       m_input_streams.push_back(std::make_shared<PAMatrixReader<8192>>(path));
     m_size = m_paths.size();
+    if (!m_input_streams.empty())
+    {
+      uint8_t alphabet_id = m_input_streams[0]->infos().alphabet_id;
+      for (auto& stream : m_input_streams)
+        if (stream->infos().alphabet_id != alphabet_id)
+          throw PipelineError("Alphabet mismatch across PA matrix inputs.");
+      Kmer<MAX_K>::set_alphabet(alphabet_from_id(alphabet_id));
+    }
   }
 
   void init_state()
@@ -376,7 +394,7 @@ public:
   void write_as_bin(const std::string& path, bool compressed)
   {
     size_t size = m_input_streams[0]->infos().bits;
-    PAMatrixWriter mw(path, m_kmer_size, size, 0, -1, compressed);
+    PAMatrixWriter mw(path, m_kmer_size, size, 0, -1, compressed, Kmer<MAX_K>::alphabet());
     while (next())
     {
       mw.template write<MAX_K>(m_current, m_counts);
@@ -463,8 +481,15 @@ public:
 
   void write_as_bin(const std::string& path, bool compressed)
   {
-    size_t size = PAMatrixReader<8192>(m_paths[0]).infos().bits;
-    PAMatrixWriter<8192> kw(path, m_kmer_size, size, 0, -1, compressed);
+    PAMatrixReader<8192> first_reader(m_paths[0]);
+    size_t size = first_reader.infos().bits;
+    uint8_t alphabet_id = first_reader.infos().alphabet_id;
+    for (auto& p : m_paths)
+      if (PAMatrixReader<8192>(p).infos().alphabet_id != alphabet_id)
+        throw PipelineError("Alphabet mismatch across PA matrix inputs.");
+    Alphabet alphabet = alphabet_from_id(alphabet_id);
+    Kmer<MAX_K>::set_alphabet(alphabet);
+    PAMatrixWriter<8192> kw(path, m_kmer_size, size, 0, -1, compressed, alphabet);
     Kmer<MAX_K> k; k.set_k(m_kmer_size);
     std::vector<uint8_t> bits(NBYTES(size));
     for (auto& p : m_paths)
@@ -522,9 +547,14 @@ public:
 
   void write_as_bin(const std::string& path, bool compressed)
   {
-    size_t size = PAHashMatrixReader<8192>(m_paths[0]).infos().bits;
-    PAHashMatrixWriter<8192> kw(
-      path, size, 0, -1, compressed);
+    PAHashMatrixReader<8192> first_reader(m_paths[0]);
+    size_t size = first_reader.infos().bits;
+    uint8_t alphabet_id = first_reader.infos().alphabet_id;
+    for (auto& p : m_paths)
+      if (PAHashMatrixReader<8192>(p).infos().alphabet_id != alphabet_id)
+        throw PipelineError("Alphabet mismatch across pa-hash matrix inputs.");
+    Alphabet alphabet = alphabet_from_id(alphabet_id);
+    PAHashMatrixWriter<8192> kw(path, size, 0, -1, compressed, alphabet);
     uint64_t hash;
     std::vector<uint8_t> bits(NBYTES(size));
     for (auto& p : m_paths)

@@ -29,20 +29,6 @@ inline void copy_gatb_kmers(Kmer<span>& kmtricks, const typename ::Kmer<span>::T
     kmtricks.get_data64_unsafe()[i] = gatb.get_data()[i];
 };
 
-template<>
-inline void copy_gatb_kmers(Kmer<32>& kmtricks, const typename ::Kmer<32>::Type& gatb)
-{
-  kmtricks.set64(gatb.getVal());
-}
-
-#ifdef __SIZEOF_INT128__
-template<>
-inline void copy_gatb_kmers(Kmer<64>& kmtricks, const typename ::Kmer<64>::Type& gatb)
-{
-  kmtricks.set128(gatb.get_128());
-}
-#endif
-
 inline void dump_pinfo(PartiInfo<5>* pinfo, uint32_t nb_parts, const std::string& path)
 {
   std::ofstream out(path, std::ios::out); check_fstream_good(path, out);

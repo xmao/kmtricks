@@ -315,7 +315,8 @@ public:
                                                            requiredC<MAX_C>::value/8,
                                                            m_sample_id,
                                                            m_part_id,
-                                                           m_lz4);
+                                                           m_lz4,
+                                                           Kmer<span>::alphabet());
 
     KmerCountProcessor<span, MAX_C>* processor(new KmerCountProcessor<span, MAX_C>(m_kmer_size,
                                                                                     m_ab_min,
@@ -396,7 +397,8 @@ public:
                                                                              requiredC<MAX_C>::value/8,
                                                                              m_sample_id,
                                                                              m_part_id,
-                                                                             m_lz4);
+                                                                             m_lz4,
+                                                                             Kmer<span>::alphabet());
 
     HashCountProcessor<span, MAX_C, 32768>* processor(new HashCountProcessor<span, MAX_C, 32768>(m_kmer_size,
                                                                                                  m_ab_min,
@@ -484,7 +486,8 @@ public:
                                                                 m_window,
                                                                 0,
                                                                 m_part_id,
-                                                                m_lz4);
+                                                                m_lz4,
+                                                                Kmer<span>::alphabet());
 
     HashVecProcessor<span>* processor(new HashVecProcessor<span>(m_kmer_size,
                                                                  m_ab_min,
@@ -567,7 +570,8 @@ public:
 
     MemAllocator pool(1);
     pool.reserve(get_required_memory<span>(m_pinfo->getNbKmer(m_part_id)));
-    kff_w_t<DMAX_C> writer = std::make_shared<KffWriter<MAX_C>>(m_path, m_kmer_size);
+    kff_w_t<DMAX_C> writer = std::make_shared<KffWriter<MAX_C>>(m_path, m_kmer_size,
+                                                                Kmer<span>::alphabet());
 
     KffCountProcessor<span, DMAX_C>* processor(new KffCountProcessor<span, MAX_C>(m_kmer_size,
                                                                                   m_ab_min,

@@ -77,10 +77,13 @@ public:
                    uint32_t partition,
                    uint64_t first,
                    uint64_t window,
-                   bool lz4)
+                   bool lz4,
+                   Alphabet alphabet = Alphabet::DNA)
     : IFile<VectorMatrixFileHeader, std::ostream, buf_size>(path, std::ios::out | std::ios::binary)
   {
     this->m_header.compressed = lz4;
+    this->m_header.alphabet_id = static_cast<uint8_t>(alphabet);
+    this->m_header.alphabet_bits_per_symbol = alphabet_bits(alphabet);
     this->m_header.bits = bits;
     this->m_header.first = first;
     this->m_header.window = window;

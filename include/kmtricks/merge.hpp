@@ -261,7 +261,7 @@ public:
 
   void write_as_bin(const std::string& path, bool compressed)
   {
-    MatrixWriter mw(path, m_kmer_size, 1, m_size, 0, m_partition, compressed);
+    MatrixWriter mw(path, m_kmer_size, 1, m_size, 0, m_partition, compressed, Kmer<MAX_K>::alphabet());
     while (next())
     {
       if (m_keep)
@@ -273,7 +273,7 @@ public:
 
   void write_as_pa(const std::string& path, bool compressed)
   {
-    PAMatrixWriter pw(path, m_kmer_size, m_size, 0, m_partition, compressed);
+    PAMatrixWriter pw(path, m_kmer_size, m_size, 0, m_partition, compressed, Kmer<MAX_K>::alphabet());
     std::vector<uint8_t> bit_vec(NBYTES(m_size));
     while (next())
     {
@@ -405,6 +405,14 @@ public:
       m_input_streams.push_back(std::make_shared<Reader>(path));
     m_size = m_paths.size();
     m_partition = m_input_streams[0]->infos().partition;
+    if (!m_input_streams.empty())
+    {
+      uint8_t alphabet_id = m_input_streams[0]->infos().alphabet_id;
+      for (auto& stream : m_input_streams)
+        if (stream->infos().alphabet_id != alphabet_id)
+          throw PipelineError("Alphabet mismatch across hash inputs.");
+      m_alphabet = alphabet_from_id(alphabet_id);
+    }
   }
 
   void init_state()
@@ -518,7 +526,8 @@ public:
 
   void write_as_bin(const std::string& path, bool compressed)
   {
-    MatrixHashWriter<8192> mhw(path, sizeof(m_counts[0]), m_size, 0, m_partition, compressed);
+    MatrixHashWriter<8192> mhw(path, sizeof(m_counts[0]), m_size, 0, m_partition, compressed,
+                               m_alphabet);
     while (next())
     {
       if (m_keep)
@@ -545,7 +554,8 @@ public:
 
   void write_as_pa(const std::string& path, bool compressed)
   {
-    PAHashMatrixWriter<8192> phw(path, m_size, 0, m_partition, compressed);
+    PAHashMatrixWriter<8192> phw(path, m_size, 0, m_partition, compressed,
+                                 m_alphabet);
     std::vector<uint8_t> bit_vec(NBYTES(m_size));
     while (next())
     {
@@ -577,7 +587,8 @@ public:
     std::vector<uint8_t> bit_vec(NBYTES(m_size), 0);
     std::vector<uint8_t> empty_vec(NBYTES(m_size), 0);
     uint64_t current = lower;
-    VectorMatrixWriter<8192> vmw(path, m_size, 0, m_partition, lower, upper-lower+1, compressed);
+    VectorMatrixWriter<8192> vmw(path, m_size, 0, m_partition, lower, upper-lower+1, compressed,
+                                 m_alphabet);
     while (next())
     {
       while (m_current > current)
@@ -605,7 +616,8 @@ public:
     std::vector<uint8_t> empty_vec(byte_count_pack(m_size, w), 0);
     uint64_t current = lower;
 
-    VectorMatrixWriter<8192> vmw(path, m_size * w, 0, m_partition, lower, upper-lower+1, compressed);
+    VectorMatrixWriter<8192> vmw(path, m_size * w, 0, m_partition, lower, upper-lower+1, compressed,
+                                 m_alphabet);
 
     while (next())
     {
@@ -638,7 +650,8 @@ public:
     }
     std::remove(std::string(path+".tmp").c_str());
     BitMatrix *trp = mat.transpose();
-    VectorMatrixWriter<8192> vmw(path, m_size, 0, m_partition, lower, upper-lower+1, compressed);
+    VectorMatrixWriter<8192> vmw(path, m_size, 0, m_partition, lower, upper-lower+1, compressed,
+                                 m_alphabet);
     vmw.dump(*trp);
     delete trp;
   }
@@ -667,6 +680,7 @@ private:
 
   uint32_t m_size;
   std::vector<uint32_t>& m_a_min_vec;
+  Alphabet m_alphabet {Alphabet::DNA};
 
   uint64_t m_next;
   uint64_t m_current;

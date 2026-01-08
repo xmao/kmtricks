@@ -20,6 +20,7 @@
 #include <kmtricks/io/io_common.hpp>
 #include <kmtricks/kmer.hpp>
 #include <kmtricks/utils.hpp>
+#include <kmtricks/exceptions.hpp>
 
 namespace km {
 
@@ -101,12 +102,15 @@ public:
                uint32_t nb_counts,
                uint32_t id,
                uint32_t partition,
-               bool lz4)
+               bool lz4,
+               Alphabet alphabet = Alphabet::DNA)
     : IFile<MatrixFileHeader, std::ostream, buf_size>(path, std::ios::out | std::ios::binary)
   {
     this->m_header.compressed = lz4;
+    this->m_header.alphabet_id = static_cast<uint8_t>(alphabet);
+    this->m_header.alphabet_bits_per_symbol = alphabet_bits(alphabet);
     this->m_header.kmer_size = kmer_size;
-    this->m_header.kmer_slots = (kmer_size + 31) / 32;
+    this->m_header.kmer_slots = kmer_slots(kmer_size, alphabet);
     this->m_header.count_slots = count_size;
     this->m_header.nb_counts = nb_counts;
     this->m_header.id = id;
@@ -144,6 +148,7 @@ public:
   template<size_t MAX_K, size_t MAX_C>
   bool read(Kmer<MAX_K>& kmer, std::vector<typename selectC<MAX_C>::type>& counts)
   {
+    Kmer<MAX_K>::set_alphabet(alphabet_from_id(this->m_header.alphabet_id));
     this->m_second_layer->read(reinterpret_cast<char*>(kmer.get_data64_unsafe()),
                                 this->m_header.kmer_slots*8);
     this->m_second_layer->read(reinterpret_cast<char*>(counts.data()),
@@ -156,6 +161,7 @@ public:
   template<size_t MAX_K, size_t MAX_C>
   bool read(Kmer<MAX_K>& kmer, std::vector<typename selectC<MAX_C>::type>& counts, std::size_t n)
   {
+    Kmer<MAX_K>::set_alphabet(alphabet_from_id(this->m_header.alphabet_id));
     this->m_second_layer->read(reinterpret_cast<char*>(kmer.get_data64_unsafe()),
                                 this->m_header.kmer_slots*8);
     this->m_second_layer->read(reinterpret_cast<char*>(counts.data()),
@@ -168,6 +174,7 @@ public:
   template<size_t MAX_K, size_t MAX_C>
   void write_as_text(std::ostream& stream)
   {
+    Kmer<MAX_K>::set_alphabet(alphabet_from_id(this->m_header.alphabet_id));
     Kmer<MAX_K> kmer; kmer.set_k(this->m_header.kmer_size);
     std::vector<typename selectC<MAX_C>::type> counts(this->m_header.nb_counts);
     while (read<MAX_K, MAX_C>(kmer, counts))
@@ -182,6 +189,7 @@ public:
   template<size_t MAX_K, size_t MAX_C>
   void write_kmers(std::ostream& stream)
   {
+    Kmer<MAX_K>::set_alphabet(alphabet_from_id(this->m_header.alphabet_id));
     Kmer<MAX_K> kmer; kmer.set_k(this->m_header.kmer_size);
     std::vector<typename selectC<MAX_C>::type> counts(this->m_header.nb_counts);
     while (read<MAX_K, MAX_C>(kmer, counts))
@@ -241,10 +249,13 @@ public:
                    uint32_t nb_counts,
                    uint32_t id,
                    uint32_t partition,
-                   bool lz4)
+                   bool lz4,
+                   Alphabet alphabet = Alphabet::DNA)
     : IFile<MatrixHashFileHeader, std::ostream, buf_size>(path, std::ios::out | std::ios::binary)
   {
     this->m_header.compressed = lz4;
+    this->m_header.alphabet_id = static_cast<uint8_t>(alphabet);
+    this->m_header.alphabet_bits_per_symbol = alphabet_bits(alphabet);
     this->m_header.count_slots = count_size;
     this->m_header.nb_counts = nb_counts;
     this->m_header.id = id;
@@ -344,6 +355,14 @@ public:
     for (auto& path: m_paths)
       m_input_streams.push_back(std::make_shared<MatrixReader<8192>>(path));
     m_size = m_paths.size();
+    if (!m_input_streams.empty())
+    {
+      uint8_t alphabet_id = m_input_streams[0]->infos().alphabet_id;
+      for (auto& stream : m_input_streams)
+        if (stream->infos().alphabet_id != alphabet_id)
+          throw PipelineError("Alphabet mismatch across matrix inputs.");
+      Kmer<MAX_K>::set_alphabet(alphabet_from_id(alphabet_id));
+    }
   }
 
   void init_state()
@@ -395,7 +414,8 @@ public:
   void write_as_bin(const std::string& path, bool compressed)
   {
     size_t size = m_input_streams[0]->infos().nb_counts;
-    MatrixWriter mw(path, m_kmer_size, requiredC<MAX_C>::value/8, size, 0, -1, compressed);
+    MatrixWriter mw(path, m_kmer_size, requiredC<MAX_C>::value/8, size, 0, -1, compressed,
+                    Kmer<MAX_K>::alphabet());
     while (next())
     {
       mw.template write<MAX_K, MAX_C>(m_current, m_counts);
@@ -471,8 +491,16 @@ public:
 
   void write_as_bin(const std::string& path, bool compressed)
   {
-    size_t size = MatrixReader<8192>(m_paths[0]).infos().nb_counts;
-    MatrixWriter<8192> kw(path, m_kmer_size, requiredC<MAX_C>::value/8, size, 0, -1, compressed);
+    MatrixReader<8192> first_reader(m_paths[0]);
+    size_t size = first_reader.infos().nb_counts;
+    uint8_t alphabet_id = first_reader.infos().alphabet_id;
+    for (auto& p : m_paths)
+      if (MatrixReader<8192>(p).infos().alphabet_id != alphabet_id)
+        throw PipelineError("Alphabet mismatch across matrix inputs.");
+    Alphabet alphabet = alphabet_from_id(alphabet_id);
+    Kmer<MAX_K>::set_alphabet(alphabet);
+    MatrixWriter<8192> kw(path, m_kmer_size, requiredC<MAX_C>::value/8, size, 0, -1, compressed,
+                          alphabet);
     Kmer<MAX_K> k; k.set_k(m_kmer_size);
     std::vector<typename selectC<MAX_C>::type> counts(size);
     for (auto& p : m_paths)
@@ -532,8 +560,15 @@ public:
 
   void write_as_bin(const std::string& path, bool compressed)
   {
-    size_t size = MatrixHashReader<8192>(m_paths[0]).infos().nb_counts;
-    MatrixHashWriter<8192> kw(path, requiredC<MAX_C>::value/8, size, 0, -1, compressed);
+    MatrixHashReader<8192> first_reader(m_paths[0]);
+    size_t size = first_reader.infos().nb_counts;
+    uint8_t alphabet_id = first_reader.infos().alphabet_id;
+    for (auto& p : m_paths)
+      if (MatrixHashReader<8192>(p).infos().alphabet_id != alphabet_id)
+        throw PipelineError("Alphabet mismatch across hash matrix inputs.");
+    Alphabet alphabet = alphabet_from_id(alphabet_id);
+    MatrixHashWriter<8192> kw(path, requiredC<MAX_C>::value/8, size, 0, -1, compressed,
+                              alphabet);
     uint64_t hash;
     std::vector<typename selectC<MAX_C>::type> counts(size);
     for (auto& p : m_paths)
@@ -563,4 +598,3 @@ private:
 };
 
 };
-

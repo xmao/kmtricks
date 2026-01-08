@@ -54,7 +54,10 @@ public:
     if (m_opt->hist)
     {
       for (auto& h : m_hists)
-        HistWriter(KmDir::get().get_hist_path(KmDir::get().m_fof.get_id(h->idx())), *h, false);
+        HistWriter(KmDir::get().get_hist_path(KmDir::get().m_fof.get_id(h->idx())),
+                   *h,
+                   false,
+                   Kmer<MAX_K>::alphabet());
     }
   }
 

@@ -15,6 +15,8 @@
 #include <kmtricks/hash.hpp>
 #include <kmtricks/repartition.hpp>
 #include <kmtricks/io/fof.hpp>
+#include <kmtricks/alphabet.hpp>
+#include <kmtricks/exceptions.hpp>
 
 namespace fs = std::filesystem;
 
@@ -72,10 +74,17 @@ class FilterTask : public ITask
       std::unique_ptr<KmerWriter<8192>> kw {nullptr};
 
       KmerReader<8192> kr(m_kmers);
+      MatrixReader<8192> mr(m_matrix);
+
+      if (kr.infos().alphabet_id != mr.infos().alphabet_id)
+        throw PipelineError("Alphabet mismatch between kmers and matrix inputs.");
+
+      const Alphabet alphabet = alphabet_from_id(kr.infos().alphabet_id);
+      Kmer<MAX_K>::set_alphabet(alphabet);
+
       Kmer<MAX_K> kmer; kmer.set_k(kr.infos().kmer_size);
       count_type count;
 
-      MatrixReader<8192> mr(m_matrix);
       Kmer<MAX_K> kmer2; kmer2.set_k(mr.infos().kmer_size);
 
       if (with_vector)
@@ -91,7 +100,8 @@ class FilterTask : public ITask
                                                   mr.infos().nb_counts + 1,
                                                   mr.infos().id,
                                                   mr.infos().partition,
-                                                  m_cpr);
+                                                  m_cpr,
+                                                  alphabet);
       }
 
       if (with_kmer)
@@ -101,7 +111,8 @@ class FilterTask : public ITask
                                                 kr.infos().count_slots,
                                                 kr.infos().id,
                                                 kr.infos().partition,
-                                                m_cpr);
+                                                m_cpr,
+                                                alphabet);
       }
 
 
@@ -210,10 +221,17 @@ class FilterTask : public ITask
       std::unique_ptr<KmerWriter<8192>> kw {nullptr};
 
       KmerReader<8192> kr(m_kmers);
+      PAMatrixReader<8192> mr(m_matrix);
+
+      if (kr.infos().alphabet_id != mr.infos().alphabet_id)
+        throw PipelineError("Alphabet mismatch between kmers and PA matrix inputs.");
+
+      const Alphabet alphabet = alphabet_from_id(kr.infos().alphabet_id);
+      Kmer<MAX_K>::set_alphabet(alphabet);
+
       Kmer<MAX_K> kmer; kmer.set_k(kr.infos().kmer_size);
       count_type count;
 
-      PAMatrixReader<8192> mr(m_matrix);
       Kmer<MAX_K> kmer2; kmer2.set_k(mr.infos().kmer_size);
 
       if (with_vector)
@@ -228,7 +246,8 @@ class FilterTask : public ITask
                                                     mr.infos().bits,
                                                     mr.infos().id,
                                                     mr.infos().partition,
-                                                    m_cpr);
+                                                    m_cpr,
+                                                    alphabet);
       }
 
       if (with_kmer)
@@ -238,7 +257,8 @@ class FilterTask : public ITask
                                                 kr.infos().count_slots,
                                                 kr.infos().id,
                                                 kr.infos().partition,
-                                                m_cpr);
+                                                m_cpr,
+                                                alphabet);
       }
 
       std::vector<uint8_t> bits(NBYTES(mr.infos().bits));

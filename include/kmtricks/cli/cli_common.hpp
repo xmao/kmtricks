@@ -49,6 +49,11 @@ inline void add_common(bc::cmd_t cmd, km_options_t options)
     ->def("info")
     ->checker(bc::check::f::in("debug|info|warning|error"))
     ->setter(options->verbosity);
+  cmd->add_param("--alphabet", "sequence alphabet [dna|protein].")
+    ->meta("STR")
+    ->def("dna")
+    ->checker(bc::check::f::in("dna|protein"))
+    ->setter(options->alphabet);
 }
 
 };  // namespace kmdiff

@@ -11,6 +11,7 @@ target_include_directories(headers SYSTEM INTERFACE ${THIRD_DIR}/robin-hood-hash
 ExternalProject_Add(FMT
   PREFIX FMT
   SOURCE_DIR ${PROJECT_SOURCE_DIR}/thirdparty/fmt
+  CMAKE_ARGS -DFMT_TEST=OFF -DFMT_DOC=OFF -DFMT_FUZZ=OFF
   INSTALL_COMMAND ""
   LOG_CONFIGURE ON
   LOG_BUILD ON
@@ -135,5 +136,4 @@ target_include_directories(headers INTERFACE ${THIRD_DIR}/bitpacker/include)
 if(ARCH_ARM64)
   target_include_directories(headers SYSTEM INTERFACE ${THIRD_DIR}/sse2neon)
 endif()
-
 

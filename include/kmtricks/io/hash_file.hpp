@@ -19,6 +19,8 @@
 #pragma once
 #include <kmtricks/io/io_common.hpp>
 #include <kmtricks/utils.hpp>
+#include <kmtricks/alphabet.hpp>
+#include <kmtricks/exceptions.hpp>
 #include <ic.h>
 
 namespace km {
@@ -70,10 +72,13 @@ public:
              uint32_t count_size,
              uint32_t id,
              uint32_t partition,
-             bool compress)
+             bool compress,
+             Alphabet alphabet = Alphabet::DNA)
     : IFile<HashFileHeader, std::ostream, buf_size>(path, std::ios::out | std::ios::binary)
   {
     this->m_header.compressed = compress;
+    this->m_header.alphabet_id = static_cast<uint8_t>(alphabet);
+    this->m_header.alphabet_bits_per_symbol = alphabet_bits(alphabet);
     this->m_header.count_slots = count_size;
     this->m_header.id = id;
     this->m_header.partition = partition;
@@ -244,7 +249,13 @@ public:
 
   void write_as_bin(const std::string& path, bool compressed)
   {
-    HashWriter<MAX_C, 32768> kw(path, requiredC<MAX_C>::value/8, 0, -1, compressed);
+    HashReader<MAX_C, 32768> first_reader(m_paths[0]);
+    uint8_t alphabet_id = first_reader.infos().alphabet_id;
+    for (auto& p : m_paths)
+      if (HashReader<MAX_C, 32768>(p).infos().alphabet_id != alphabet_id)
+        throw PipelineError("Alphabet mismatch across hash inputs.");
+    Alphabet alphabet = alphabet_from_id(alphabet_id);
+    HashWriter<MAX_C, 32768> kw(path, requiredC<MAX_C>::value/8, 0, -1, compressed, alphabet);
     for (auto& p : m_paths)
     {
       HashReader<MAX_C, 32768> kr(p);

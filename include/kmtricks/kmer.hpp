@@ -16,7 +16,7 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *****************************************************************************/
 
-// Basically a 2bit representation of a k-mer, inspired by GATB-core.
+// Packed k-mer representation with alphabet-aware encoding.
 // see also kmer_hash.hpp
 
 #pragma once
@@ -31,10 +31,14 @@
 #include <vector>
 #include <limits>
 
+#include <kmtricks/alphabet.hpp>
+#include <kmtricks/exceptions.hpp>
+
 #define DEFAULT_MINIMIZER_KM 1000000000
 
 namespace km
 {
+constexpr uint8_t MAX_SYMBOL_BITS = 5;
 const char bToN[] = {'A', 'C', 'T', 'G'};
 const char revN[] = {'T', 'G', 'A', 'C'};
 const uint8_t revB[] = {2, 3, 0, 1};
@@ -66,16 +70,71 @@ const uint8_t rev_table[256] = {
  0xa1, 0xe1, 0x21, 0x61, 0xb1, 0xf1, 0x31, 0x71, 0x81, 0xc1, 0x1, 0x41, 0x91, 0xd1, 0x11, 0x51,
  0xa5, 0xe5, 0x25, 0x65, 0xb5, 0xf5, 0x35, 0x75, 0x85, 0xc5, 0x5, 0x45, 0x95, 0xd5, 0x15, 0x55};
 
-inline std::string str_rev_comp(const std::string& s)
+const char bToP[] = {'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y', 'X'};
+
+inline uint8_t protein_to_code(unsigned char c)
 {
+  switch (c)
+  {
+    case 'A': case 'a': return 0;
+    case 'C': case 'c': return 1;
+    case 'D': case 'd': return 2;
+    case 'E': case 'e': return 3;
+    case 'F': case 'f': return 4;
+    case 'G': case 'g': return 5;
+    case 'H': case 'h': return 6;
+    case 'I': case 'i': return 7;
+    case 'K': case 'k': return 8;
+    case 'L': case 'l': return 9;
+    case 'M': case 'm': return 10;
+    case 'N': case 'n': return 11;
+    case 'P': case 'p': return 12;
+    case 'Q': case 'q': return 13;
+    case 'R': case 'r': return 14;
+    case 'S': case 's': return 15;
+    case 'T': case 't': return 16;
+    case 'V': case 'v': return 17;
+    case 'W': case 'w': return 18;
+    case 'Y': case 'y': return 19;
+    case 'B': case 'b':
+    case 'Z': case 'z':
+    case 'J': case 'j':
+    case 'X': case 'x':
+    case '*':
+      return 20;
+    default:
+      return 20;
+  }
+}
+
+inline uint8_t char_to_code(Alphabet alphabet, unsigned char c)
+{
+  return alphabet == Alphabet::DNA ? NToB[c] : protein_to_code(c);
+}
+
+inline char code_to_char(Alphabet alphabet, uint8_t code)
+{
+  if (alphabet == Alphabet::DNA)
+    return bToN[code & 3];
+  if (code >= (sizeof(bToP) / sizeof(bToP[0])))
+    return 'X';
+  return bToP[code];
+}
+
+inline std::string str_rev_comp(const std::string& s, Alphabet alphabet = Alphabet::DNA)
+{
+  if (alphabet != Alphabet::DNA)
+    return s;
   std::string rev;
   for (auto it=s.rbegin(); it!=s.rend(); it++)
     rev.push_back(revN[NToB[*it]]);
   return rev;
 }
 
-inline bool is_valid_minimizer(uint32_t value, uint8_t size)
+inline bool is_valid_minimizer(uint64_t value, uint8_t size, Alphabet alphabet)
 {
+  if (alphabet != Alphabet::DNA)
+    return true;
   uint32_t mask1 = std::numeric_limits<uint32_t>::max() >> (((sizeof(uint32_t)*8)-(size*2))+4);
   uint32_t mask01 = static_cast<uint32_t>(0x5555555555555555);
   uint32_t mask00 = mask01 & mask1;
@@ -88,42 +147,45 @@ class Mmer
 {
 public:
   Mmer() {}
-  Mmer(uint32_t value, uint8_t size)
+  Mmer(uint64_t value, uint8_t size, Alphabet alphabet = Alphabet::DNA)
   {
-    set(value, size);
+    set(value, size, alphabet);
   }
 
-  void set(uint32_t value, uint8_t size)
+  void set(uint64_t value, uint8_t size, Alphabet alphabet)
   {
     m_size = size;
     m_data = value;
+    m_alphabet = alphabet;
   }
 
   Mmer rev_comp()
   {
-    uint32_t rev = 0;
-    uint32_t tmp = m_data;
+    if (m_alphabet != Alphabet::DNA)
+      return *this;
+    uint64_t rev = 0;
+    uint64_t tmp = m_data;
     for (int i=m_size-1; i>=0; i--)
     {
       rev <<= 2;
       rev |= revB[tmp & 3];
       tmp >>= 2;
     }
-    return Mmer(rev, m_size);
+    return Mmer(rev, m_size, m_alphabet);
   }
 
   std::string to_string() const
   {
     int i;
-    uint32_t tmp = m_data;
+    uint64_t tmp = m_data;
 
-    char seq[17];
+    std::string seq(m_size, '\0');
     for (i=m_size-1; i>=0; i--)
     {
-        seq[i] = bToN[tmp & 3];
-        tmp = tmp >> 2;
+        seq[static_cast<size_t>(i)] =
+          code_to_char(m_alphabet, tmp & ((1ULL << alphabet_bits(m_alphabet)) - 1));
+        tmp = tmp >> alphabet_bits(m_alphabet);
     }
-    seq[m_size]='\0';
     return seq;
   }
 
@@ -142,11 +204,12 @@ public:
     return m_data == m.m_data;
   }
 
-  uint32_t value() const { return m_data; }
+  uint64_t value() const { return m_data; }
 
 private:
-  uint32_t m_data {0};
+  uint64_t m_data {0};
   uint8_t m_size {0};
+  Alphabet m_alphabet {Alphabet::DNA};
 };
 
 /**
@@ -168,9 +231,11 @@ class Kmer
   using data_ptr8 = const uint8_t*;
 
 public:
-  const static uint16_t m_max_data{(MAX_K + 31) / 32};
+  const static uint16_t m_max_data{(MAX_K * MAX_SYMBOL_BITS + 63) / 64};
   inline static size_t m_kmer_size;
   inline static uint16_t m_n_data;
+  inline static Alphabet m_alphabet {Alphabet::DNA};
+  inline static uint8_t m_bits_per_symbol {km::alphabet_bits(Alphabet::DNA)};
 
 protected:
 
@@ -190,6 +255,26 @@ protected:
   }
 
   static const size_t get_size_bits() { return 8 * sizeof(uint64_t) * m_max_data ;}
+  static Alphabet alphabet() { return m_alphabet; }
+  static uint8_t bits_per_symbol() { return m_bits_per_symbol; }
+
+  static void set_alphabet(Alphabet alphabet)
+  {
+    m_alphabet = alphabet;
+    m_bits_per_symbol = km::alphabet_bits(alphabet);
+    if (m_kmer_size != 0)
+    {
+      const size_t bits = m_kmer_size * m_bits_per_symbol;
+      m_n_data = static_cast<uint16_t>((bits + 63) / 64);
+      if (bits > (m_max_data * 64))
+        throw ConfigError("k-mer size exceeds storage capacity for current alphabet.");
+    }
+  }
+
+  static uint32_t slots_for_kmer(size_t kmer_size)
+  {
+    return static_cast<uint32_t>((kmer_size * m_bits_per_symbol + 63) / 64);
+  }
 
   /***********************
   *    Constructors      *
@@ -212,7 +297,10 @@ protected:
   {
     std::fill(std::begin(m_data), std::end(m_data), 0);
     m_kmer_size = kmer_size;
-    m_n_data = (m_kmer_size + 31) / 32;
+    const size_t bits = m_kmer_size * m_bits_per_symbol;
+    m_n_data = static_cast<uint16_t>((bits + 63) / 64);
+    if (bits > (m_max_data * 64))
+      throw ConfigError("k-mer size exceeds storage capacity for current alphabet.");
   }
 
   void set64(uint64_t value) { m_data[0] = value; }
@@ -227,14 +315,14 @@ protected:
   {
     set_k(kmer_size);
     for (size_t i=0; i<kmer_size; i++)
-      (*this) = (*this) * 4 + NToB[data[i]];
+      (*this) = (*this << m_bits_per_symbol) + static_cast<uint64_t>(char_to_code(m_alphabet, data[i]));
   }
 
   void set_polynom(const std::string& s)
   {
     set_k(s.size());
     for (size_t i=0; i<s.size(); i++)
-      (*this) = (*this) * 4 + NToB[s[i]];
+      (*this) = (*this << m_bits_per_symbol) + static_cast<uint64_t>(char_to_code(m_alphabet, s[i]));
   }
 
   /***********************
@@ -245,13 +333,33 @@ protected:
   data_ptr64 get_data64() const { return m_data; }
   data_ptr8 get_data8() const { return m_data8; }
   uint64_t* get_data64_unsafe() { return m_data; }
+#ifdef __SIZEOF_INT128__
+  void set128(__uint128_t value)
+  {
+    m_data[0] = static_cast<uint64_t>(value);
+    m_data[1] = static_cast<uint64_t>(value >> 64);
+  }
+  __uint128_t get128() const
+  {
+    return (static_cast<__uint128_t>(m_data[1]) << 64) | m_data[0];
+  }
+#endif
 
   /***********************
   *    Access data       *
   ***********************/
 
-  uint8_t operator[] (size_t i) const { return (m_data[i / 32] >> (2*(i % 32))) & 3; }
-  char at(size_t i) const { return bToN[(*this)[m_kmer_size-i-1]]; }
+  uint8_t operator[] (size_t i) const
+  {
+    const size_t bit_index = i * m_bits_per_symbol;
+    const size_t word = bit_index / 64;
+    const size_t offset = bit_index % 64;
+    uint64_t val = m_data[word] >> offset;
+    if (offset + m_bits_per_symbol > 64 && word + 1 < m_max_data)
+      val |= m_data[word + 1] << (64 - offset);
+    return static_cast<uint8_t>(val & ((1ULL << m_bits_per_symbol) - 1));
+  }
+  char at(size_t i) const { return code_to_char(m_alphabet, (*this)[m_kmer_size-i-1]); }
   uint8_t at2bit(size_t i) const { return (*this)[m_kmer_size-i-1]; }
   uint8_t byte_at(size_t i) const { return (*this)[m_kmer_size-i-1]; }
 
@@ -357,16 +465,27 @@ protected:
 
   Kmer<MAX_K> operator*(uint32_t coeff) const
   {
-    Kmer<MAX_K> res(*this);
-    if (coeff == 2 || coeff == 4)
+    Kmer<MAX_K> res;
+    if (coeff == 0)
+      return res;
+    if ((coeff & (coeff - 1)) == 0)
     {
-      res = res << (coeff / 2);
+      uint32_t shift = 0;
+      while ((coeff >> shift) > 1)
+        shift++;
+      return (*this) << shift;
     }
-    else
+#ifdef __SIZEOF_INT128__
+    uint64_t carry = 0;
+    for (size_t i=0; i<m_max_data; i++)
     {
-      if (coeff == 21)
-        res = (res << 4) + (res << 2) + res;
+      __uint128_t prod = static_cast<__uint128_t>(m_data[i]) * coeff + carry;
+      res.m_data[i] = static_cast<uint64_t>(prod);
+      carry = static_cast<uint64_t>(prod >> 64);
     }
+#else
+    throw ConfigError("Generic k-mer multiplication requires __int128 support.");
+#endif
     return res;
   }
 
@@ -448,16 +567,21 @@ protected:
   Kmer<MAX_K> operator>>(uint32_t shift) const
   {
     Kmer<MAX_K> res;
-    int lshift = shift / 64;
-    int sshift = shift % 64;
-    res.m_data[0] = (m_data[lshift] >> sshift);
-    for (int i=1; i<m_max_data - lshift; i++)
+    if (shift == 0)
+      return *this;
+    const size_t wshift = shift / 64;
+    const size_t bshift = shift % 64;
+    for (size_t i=0; i<m_max_data; i++)
     {
-      res.m_data[i] = (m_data[i+lshift] >> sshift);
-      if (sshift == 0)
-        res.m_data[i-1] = res.m_data[i-1];
-      else
-        res.m_data[i-1] = res.m_data[i-1] | (m_data[i+lshift] << (64 - sshift));
+      if (i + wshift >= m_max_data)
+      {
+        res.m_data[i] = 0;
+        continue;
+      }
+      uint64_t val = m_data[i + wshift] >> bshift;
+      if (bshift && i + wshift + 1 < m_max_data)
+        val |= m_data[i + wshift + 1] << (64 - bshift);
+      res.m_data[i] = val;
     }
     return res;
   }
@@ -465,18 +589,22 @@ protected:
   Kmer<MAX_K> operator<<(uint32_t shift) const
   {
     Kmer<MAX_K> res;
-    int lshift = shift / 64;
-    int sshift = shift % 64;
-
-    for (int i=lshift; i<m_max_data - 1; i++)
+    if (shift == 0)
+      return *this;
+    const size_t wshift = shift / 64;
+    const size_t bshift = shift % 64;
+    for (size_t i=m_max_data; i-- > 0; )
     {
-      res.m_data[i] = res.m_data[i] | (m_data[i-lshift] << sshift);
-      if (sshift == 0)
-        res.m_data[i+1] = 0;
-      else
-        res.m_data[i+1] = m_data[i-lshift] >> (64 - sshift);
+      if (i < wshift)
+      {
+        res.m_data[i] = 0;
+        continue;
+      }
+      uint64_t val = m_data[i - wshift] << bshift;
+      if (bshift && i > wshift)
+        val |= m_data[i - wshift - 1] >> (64 - bshift);
+      res.m_data[i] = val;
     }
-    res.m_data[m_max_data - 1] = res.m_data[m_max_data - 1] | (m_data[m_max_data - 1 + lshift] << shift);
     return res;
   }
 
@@ -520,16 +648,21 @@ protected:
 
   Kmer<MAX_K> rev_comp() const
   {
+    if (m_alphabet != Alphabet::DNA)
+      return *this;
     Kmer<MAX_K> kmer; kmer.set_k(m_kmer_size);
     for (size_t i=0; i<8*m_n_data; i++)
     {
       kmer.m_data8[8*m_n_data-1-i] = rev_table[m_data8[i]];
     }
-    return (kmer >> (2 * (32 * m_n_data - m_kmer_size)));
+    const size_t symbols_per_word = 64 / m_bits_per_symbol;
+    return (kmer >> (m_bits_per_symbol * (symbols_per_word * m_n_data - m_kmer_size)));
   }
 
   Kmer<MAX_K> canonical() const
   {
+    if (m_alphabet != Alphabet::DNA)
+      return *this;
     Kmer<MAX_K> kmer = rev_comp();
     return (kmer < *this) ? kmer : *this;
   }
@@ -543,7 +676,7 @@ protected:
     char seq[m_kmer_size + 1];
     for (size_t i=0; i<m_kmer_size; i++)
     {
-      seq[m_kmer_size-i-1] = bToN[(*this)[i]];
+      seq[m_kmer_size-i-1] = code_to_char(m_alphabet, (*this)[i]);
     }
     seq[m_kmer_size] = '\0';
     return seq;
@@ -577,48 +710,54 @@ protected:
     std::vector<Mmer> mmers(nb_mmers);
     for (size_t i=0; i<nb_mmers; i++)
     {
-      uint32_t value = 0;
+      uint64_t value = 0;
       for (size_t j=i; j<i+size; j++)
       {
-        value <<= 2;
+        value <<= m_bits_per_symbol;
         value |= byte_at(j);
       }
-      mmers[i].set(value, size);
+      mmers[i].set(value, size, m_alphabet);
     }
     return mmers;
   }
 
   Mmer minimizer(uint8_t size)
   {
-    uint32_t def = ((uint64_t)1 << (2*size)) - 1;
+    const uint32_t max_bits = size * m_bits_per_symbol;
+    if (max_bits >= 64)
+      throw ConfigError("Minimizer size exceeds supported encoding width.");
+    uint64_t def = ((uint64_t)1 << max_bits) - 1;
     const size_t nb_mmers = m_kmer_size - size + 1;
-    Mmer minim(std::numeric_limits<uint32_t>::max(), size);
+    Mmer minim(std::numeric_limits<uint64_t>::max(), size, m_alphabet);
     for (size_t i=0; i<nb_mmers; i++)
     {
-      uint32_t value = 0;
+      uint64_t value = 0;
       for (size_t j=i; j<i+size; j++)
       {
-        value <<= 2;
+        value <<= m_bits_per_symbol;
         value |= byte_at(j);
       }
-      uint32_t rev = 0;
-      uint32_t tmp = value;
-      for (int j=size-1; j>=0; j--)
+      uint64_t rev = value;
+      if (m_alphabet == Alphabet::DNA)
       {
-        rev <<= 2;
-        rev |= revB[tmp & 3];
-        tmp >>= 2;
+        rev = 0;
+        uint64_t tmp = value;
+        for (int j=size-1; j>=0; j--)
+        {
+          rev <<= 2;
+          rev |= revB[tmp & 3];
+          tmp >>= 2;
+        }
       }
-      //Mmer tmp_minim(value, size);
-      Mmer tmp_minim(rev < value ? rev : value, size);
-      if (is_valid_minimizer(tmp_minim.value(), size))
+      Mmer tmp_minim(rev < value ? rev : value, size, m_alphabet);
+      if (is_valid_minimizer(tmp_minim.value(), size, m_alphabet))
       {
         if (tmp_minim < minim)
           minim = tmp_minim;
       }
       else
       {
-        tmp_minim = Mmer(def, size);
+        tmp_minim = Mmer(def, size, m_alphabet);
         if (tmp_minim < minim)
         {
           minim = tmp_minim;
@@ -627,548 +766,6 @@ protected:
     }
     return minim;
   }
-};
-
-/**
- * @brief Kmer<32> specialization
- * Same as Kmer<MAX_K> but use an uint64_t as backend
- * @tparam 32
- */
-template<> class Kmer<32>
-{
-  using data_ptr64 = const uint64_t*;
-  using data_ptr8 = const uint8_t*;
-public:
-  inline static size_t m_kmer_size;
-  inline static uint16_t m_n_data;
-public:
-  static std::string name() { return "Kmer<32> - uint64_t"; }
-  static const size_t get_size_bits() { return 8 * sizeof(uint64_t);}
-  /***********************
-  *    Constructors      *
-  ***********************/
-
-  Kmer() {}
-  Kmer(size_t kmer_size) { set_k(kmer_size); }
-  Kmer(const std::string& str_kmer) { set_polynom(str_kmer); }
-
-  /***********************
-  *    Set data          *
-  ***********************/
-
-  void zero() { m_data = 0; }
-  void set_k(size_t kmer_size) { m_data = 0; m_kmer_size = kmer_size; }
-  void set64(uint64_t value) { m_data = value; }
-  void set64_p(const uint64_t* ptr) { m_data = *ptr; }
-
-  void set_polynom(const char* data, size_t kmer_size)
-  {
-    set_k(kmer_size);
-    for (size_t i=0; i<kmer_size; i++)
-      m_data = m_data * 4 + NToB[data[i]];
-  }
-
-  void set_polynom(const std::string& s)
-  {
-    set_k(s.size());
-    for (size_t i=0; i<s.size(); i++)
-      m_data = m_data * 4 + NToB[s[i]];
-  }
-
-  /***********************
-  *    Get data          *
-  ***********************/
-
-  uint64_t get64() const { return m_data; }
-  data_ptr64 get_data64() const { return &m_data; }
-  data_ptr8 get_data8() const { return reinterpret_cast<const uint8_t*>(&m_data); }
-
-  uint64_t* get_data64_unsafe() { return &m_data; }
-
-  /***********************
-  *    Access data       *
-  ***********************/
-
-  uint8_t operator[] (size_t i) const { return (m_data >> (2 * i)) & 3; }
-  char at(size_t i) const { return bToN[(*this)[m_kmer_size-i-1]]; }
-  uint8_t at2bit(size_t i) const { return (*this)[m_kmer_size-i-1]; }
-  uint8_t byte_at(size_t i) const { return (*this)[m_kmer_size-i-1]; }
-
-  /***********************
-  * Comparison operators *
-  ***********************/
-  bool operator<(const Kmer<32>& o) const { return m_data < o.m_data; }
-  bool operator<=(const Kmer<32>& o) const { return m_data <= o.m_data; }
-  bool operator<(uint64_t o) const { return m_data < o; }
-  bool operator<=(uint64_t o) const { return m_data <= o; }
-
-  bool operator>(const Kmer<32>& o) const { return m_data > o.m_data; }
-  bool operator>=(const Kmer<32>& o) const { return m_data >= o.m_data; }
-  bool operator>(uint64_t o) const { return m_data > o; }
-  bool operator>=(uint64_t o) const { return m_data >= o; }
-
-  bool operator==(const Kmer<32>& o) const { return m_data == o.m_data; }
-  bool operator!=(const Kmer<32>& o) const { return m_data != o.m_data; }
-  bool operator==(uint64_t o) const { return m_data == o; }
-  bool operator!=(uint64_t o) const { return m_data != o; }
-
-  /***********************
-  * Arithmetic operators *
-  ***********************/
-
-  Kmer<32> operator+(const Kmer<32>& o) const { Kmer<32> k; k.m_data = m_data + o.m_data; return k; }
-  Kmer<32> operator+(uint64_t o) const { Kmer<32> k; k.m_data = m_data + o; return k; }
-
-  Kmer<32> operator-(const Kmer<32>& o) const { Kmer<32> k; k.m_data = m_data - o.m_data; return k; }
-  Kmer<32> operator-(uint64_t o) const { Kmer<32> k; k.m_data = m_data - o; return k; }
-
-  Kmer<32> operator*(uint32_t coeff) const { Kmer<32> k; k.m_data = m_data * coeff; return k; }
-  Kmer<32> operator/(uint32_t coeff) const { Kmer<32> k; k.m_data = m_data / coeff; return k; }
-
-  uint32_t operator%(uint32_t coeff) const { return m_data % coeff; };
-
-  /***********************
-  *  Bitwise operators   *
-  ***********************/
-
-  Kmer<32> operator&(const Kmer<32>& o) const { Kmer<32> k; k.m_data = m_data & o.m_data; return k; }
-  Kmer<32> operator|(const Kmer<32>& o) const { Kmer<32> k; k.m_data = m_data | o.m_data; return k; }
-  Kmer<32> operator^(const Kmer<32>& o) const { Kmer<32> k; k.m_data = m_data ^ o.m_data; return k; }
-
-  Kmer<32> operator&(char o) const { Kmer<32> k; k.m_data = m_data & o; return k; }
-  Kmer<32> operator|(uint64_t o) const { Kmer<32> k; k.m_data = m_data | o; return k; }
-  Kmer<32> operator^(uint64_t o) const { Kmer<32> k; k.m_data = m_data ^ o; return k; }
-
-
-  Kmer<32> operator~() const { Kmer<32> k; k.m_data = ~m_data; return k; }
-  Kmer<32> operator>>(uint32_t shift) const { Kmer<32> k; k.m_data = m_data >> shift; return k; }
-  Kmer<32> operator<<(uint32_t shift) const { Kmer<32> k; k.m_data = m_data << shift; return k; }
-
-  /***********************
-  * Assignment operators *
-  ***********************/
-
-  Kmer<32>& operator+=(const Kmer<32>& o) { m_data += o.m_data; return *this; }
-  Kmer<32>& operator-=(const Kmer<32>& o) { m_data += o.m_data; return *this; }
-  Kmer<32>& operator+=(uint64_t o) { m_data += o; return *this; }
-  Kmer<32>& operator-=(uint64_t o) { m_data += o; return *this; }
-
-  Kmer<32>& operator*=(uint32_t coeff) { m_data *= coeff; return *this; }
-  Kmer<32>& operator/=(uint32_t coeff) { m_data /= coeff; return *this; }
-
-  Kmer<32>& operator&=(const Kmer<32>& o) { m_data &= o.m_data; return *this; }
-  Kmer<32>& operator|=(const Kmer<32>& o) { m_data |= o.m_data; return *this; }
-  Kmer<32>& operator^=(const Kmer<32>& o) { m_data ^= o.m_data; return *this; }
-  Kmer<32>& operator&=(uint64_t o) { m_data &= o; return *this; }
-  Kmer<32>& operator|=(uint64_t o) { m_data |= o; return *this; }
-  Kmer<32>& operator^=(uint64_t o) { m_data ^= o; return *this; }
-
-  Kmer<32>& operator>>=(uint32_t shift) { m_data >>= shift; return *this; }
-  Kmer<32>& operator<<=(uint32_t shift) { m_data <<= shift; return *this; }
-
-  /***********************
-  *   Kmer operations    *
-  ***********************/
-
-  Kmer<32> rev_comp() const
-  {
-    Kmer<32> k; k.set_k(m_kmer_size);
-    uint64_t res = m_data;
-    res = ((res>> 2 & 0x3333333333333333) | (res & 0x3333333333333333) <<  2);
-    res = ((res>> 4 & 0x0F0F0F0F0F0F0F0F) | (res & 0x0F0F0F0F0F0F0F0F) <<  4);
-    res = ((res>> 8 & 0x00FF00FF00FF00FF) | (res & 0x00FF00FF00FF00FF) <<  8);
-    res = ((res>>16 & 0x0000FFFF0000FFFF) | (res & 0x0000FFFF0000FFFF) << 16);
-    res = ((res>>32 & 0x00000000FFFFFFFF) | (res & 0x00000000FFFFFFFF) << 32);
-    res = res ^ 0xAAAAAAAAAAAAAAAA;
-    k.m_data = (res >> (2*(32-m_kmer_size)));
-    return k;
-  }
-
-  Kmer<32> canonical() const
-  {
-    Kmer<32> kmer = rev_comp();
-    return (kmer < *this) ? kmer : *this;
-  }
-
-  /***************************
-  *   Text representation    *
-  ***************************/
-
-  std::string to_string() const
-  {
-    int i;
-    uint64_t tmp = m_data;
-
-    char seq[33];
-    for (i=m_kmer_size-1; i>=0; i--)
-    {
-        seq[i] = bToN[tmp & 3];
-        tmp = tmp >> 2;
-    }
-    seq[m_kmer_size]='\0';
-    return seq;
-  }
-
-  std::string to_bit_string() const
-  {
-    return std::bitset<sizeof(uint64_t) * 8>(m_data).to_string();
-  }
-
-  /***************************
-  *   Stream methods         *
-  ***************************/
-
-  void dump(std::ostream& stream)
-  {
-    stream.write(reinterpret_cast<char*>(&m_data), sizeof(uint64_t));
-  }
-
-  void load(std::istream& stream)
-  {
-    stream.read(reinterpret_cast<char*>(&m_data), sizeof(uint64_t));
-  }
-
-  std::vector<Mmer> mmers(uint8_t size) const
-  {
-    const size_t nb_mmers = m_kmer_size - size + 1;
-    std::vector<Mmer> mmers(nb_mmers);
-    for (size_t i=0; i<nb_mmers; i++)
-    {
-      uint32_t value = 0;
-      for (size_t j=i; j<i+size; j++)
-      {
-        value <<= 2;
-        value |= byte_at(j);
-      }
-      mmers[i].set(value, size);
-    }
-    return mmers;
-  }
-
-  Mmer minimizer(uint8_t size)
-  {
-    uint32_t def = ((uint64_t)1 << (2*size)) - 1;
-    const size_t nb_mmers = m_kmer_size - size + 1;
-    Mmer minim(std::numeric_limits<uint32_t>::max(), size);
-    for (size_t i=0; i<nb_mmers; i++)
-    {
-      uint32_t value = 0;
-      for (size_t j=i; j<i+size; j++)
-      {
-        value <<= 2;
-        value |= byte_at(j);
-      }
-      uint32_t rev = 0;
-      uint32_t tmp = value;
-      for (int j=size-1; j>=0; j--)
-      {
-        rev <<= 2;
-        rev |= revB[tmp & 3];
-        tmp >>= 2;
-      }
-      Mmer tmp_minim(rev < value ? rev : value, size);
-      //Mmer tmp_minim(value, size);
-      if (is_valid_minimizer(tmp_minim.value(), size))
-      {
-        if (tmp_minim < minim)
-          minim = tmp_minim;
-      }
-      else
-      {
-        tmp_minim = Mmer(def, size);
-        if (tmp_minim < minim)
-        {
-          minim = tmp_minim;
-        }
-      }
-    }
-    return minim;
-  }
-protected:
-  uint64_t m_data {0};
-};
-
-inline static uint64_t revcomp64 (const uint64_t x, size_t size)
-{
-  uint64_t res = x;
-  uint8_t* rev8 = reinterpret_cast<uint8_t*>(&res);
-  const uint8_t* kmer8 = reinterpret_cast<const uint8_t*>(&x);
-
-  for (size_t i=0; i<8; ++i)
-    rev8[8-1-i] = rev_table[kmer8[i]];
-  return (res >> (2*( 32 - size))) ;
-}
-
-#ifdef __SIZEOF_INT128__
-
-/**
- * @brief Kmer<64> specialization
- * Same as Kmer<MAX_K> but use an __uint128_t as backend
- * @tparam 64
- */
-template<> class Kmer<64>
-{
-  using data_ptr128 = const __uint128_t*;
-  using data_ptr64 = const uint64_t*;
-  using data_ptr8 = const uint8_t*;
-
-public:
-  inline static size_t m_kmer_size;
-
-public:
-  static std::string name() { return "Kmer<64> - __uint128_t"; }
-  static const size_t get_size_bits() { return 8 * sizeof(__uint128_t);}
-
-  /***********************
-  *    Constructors      *
-  ***********************/
-
-  Kmer() {}
-  Kmer(size_t kmer_size) { set_k(kmer_size); }
-  Kmer(const std::string& str_kmer) { set_polynom(str_kmer); }
-
-  /***********************
-  *    Set data          *
-  ***********************/
-
-  void zero() { m_data = 0; }
-  void set_k(size_t kmer_size) { m_data = 0; m_kmer_size = kmer_size; }
-  void set64(uint64_t value) { m_data = value; }
-  void set128(__uint128_t value) { m_data = value; }
-  void set64_p(const uint64_t* ptr) { m_data = (__uint128_t{ptr[1]} << 64) | ptr[0]; }
-
-  void set_polynom(const char* data, size_t kmer_size)
-  {
-    set_k(kmer_size);
-    for (size_t i=0; i<kmer_size; i++)
-      m_data = m_data * 4 + NToB[data[i]];
-  }
-
-  void set_polynom(const std::string& s)
-  {
-    set_k(s.size());
-    for (size_t i=0; i<s.size(); i++)
-      m_data = m_data * 4 + NToB[s[i]];
-  }
-
-  /***********************
-  *    Get data          *
-  ***********************/
-
-  __uint128_t get128() const { return m_data; }
-  uint64_t get64l() const { return static_cast<uint64_t>(m_data); }
-  uint64_t get64h() const { return static_cast<uint64_t>(m_data >> 64); }
-
-  data_ptr128 get_data128() const { return &m_data; };
-  data_ptr64 get_data64() const { return reinterpret_cast<const uint64_t*>(&m_data); }
-  data_ptr8 get_data8() const { return reinterpret_cast<const uint8_t*>(&m_data); }
-
-  uint64_t* get_data64_unsafe() { return reinterpret_cast<uint64_t*>(&m_data); }
-  __uint128_t* get_data128_unsafe() { return &m_data; }
-
-  /***********************
-  *    Access data       *
-  ***********************/
-
-  uint8_t operator[] (size_t i) const { return (m_data >> (2 * i)) & 3; }
-  char at(size_t i) const { return bToN[(*this)[m_kmer_size-i-1]]; }
-  uint8_t at2bit(size_t i) const { return (*this)[m_kmer_size-i-1]; }
-  uint8_t byte_at(size_t i) const { return (*this)[m_kmer_size-i-1]; }
-
-  /***********************
-  * Comparison operators *
-  ***********************/
-
-  bool operator<(const Kmer<64>& o) const { return m_data < o.m_data; }
-  bool operator<=(const Kmer<64>& o) const { return m_data <= o.m_data; }
-  bool operator<(__uint128_t o) const { return m_data < o; }
-  bool operator<=(__uint128_t o) const { return m_data <= o; }
-
-  bool operator>(const Kmer<64>& o) const { return m_data > o.m_data; }
-  bool operator>=(const Kmer<64>& o) const { return m_data >= o.m_data; }
-  bool operator>(__uint128_t o) const { return m_data > o; }
-  bool operator>=(__uint128_t o) const { return m_data >= o; }
-
-  bool operator==(const Kmer<64>& o) const { return m_data == o.m_data; }
-  bool operator!=(const Kmer<64>& o) const { return m_data != o.m_data; }
-  bool operator==(__uint128_t o) const { return m_data == o; }
-  bool operator!=(__uint128_t o) const { return m_data != o; }
-
-  /***********************
-  * Arithmetic operators *
-  ***********************/
-
-  Kmer<64> operator+(const Kmer<64>& o) const { Kmer<64> k; k.m_data = m_data + o.m_data; return k; }
-  Kmer<64> operator+(__uint128_t o) const { Kmer<64> k; k.m_data = m_data + o; return k; }
-
-  Kmer<64> operator-(const Kmer<64>& o) const { Kmer<64> k; k.m_data = m_data - o.m_data; return k; }
-  Kmer<64> operator-(__uint128_t o) const { Kmer<64> k; k.m_data = m_data - o; return k; }
-
-  Kmer<64> operator*(uint32_t coeff) const { Kmer<64> k; k.m_data = m_data * coeff; return k; }
-  Kmer<64> operator/(uint32_t coeff) const { Kmer<64> k; k.m_data = m_data / coeff; return k; }
-
-  uint32_t operator%(uint32_t coeff) const { return m_data % coeff; };
-
-  /***********************
-  *  Bitwise operators   *
-  ***********************/
-
-  Kmer<64> operator&(const Kmer<64>& o) const { Kmer<64> k; k.m_data = m_data & o.m_data; return k; }
-  Kmer<64> operator|(const Kmer<64>& o) const { Kmer<64> k; k.m_data = m_data | o.m_data; return k; }
-  Kmer<64> operator^(const Kmer<64>& o) const { Kmer<64> k; k.m_data = m_data ^ o.m_data; return k; }
-
-  Kmer<64> operator&(char o) const { Kmer<64> k; k.m_data = m_data & o; return k; }
-  Kmer<64> operator|(__uint128_t o) const { Kmer<64> k; k.m_data = m_data | o; return k; }
-  Kmer<64> operator^(__uint128_t o) const { Kmer<64> k; k.m_data = m_data ^ o; return k; }
-
-
-  Kmer<64> operator~() const { Kmer<64> k(*this); k.m_data = ~m_data; return k; }
-  Kmer<64> operator>>(uint32_t shift) const { Kmer<64> k(*this); k.m_data = m_data >> shift; return k; }
-  Kmer<64> operator<<(uint32_t shift) const { Kmer<64> k(*this); k.m_data = m_data << shift; return k; }
-
-  /***********************
-  * Assignment operators *
-  ***********************/
-
-  Kmer<64>& operator+=(const Kmer<64>& o) { m_data += o.m_data; return *this; }
-  Kmer<64>& operator-=(const Kmer<64>& o) { m_data += o.m_data; return *this; }
-  Kmer<64>& operator+=(__uint128_t o) { m_data += o; return *this; }
-  Kmer<64>& operator-=(__uint128_t o) { m_data += o; return *this; }
-
-  Kmer<64>& operator*=(uint32_t coeff) { m_data *= coeff; return *this; }
-  Kmer<64>& operator/=(uint32_t coeff) { m_data /= coeff; return *this; }
-
-  Kmer<64>& operator&=(const Kmer<64>& o) { m_data &= o.m_data; return *this; }
-  Kmer<64>& operator|=(const Kmer<64>& o) { m_data |= o.m_data; return *this; }
-  Kmer<64>& operator^=(const Kmer<64>& o) { m_data ^= o.m_data; return *this; }
-  Kmer<64>& operator&=(__uint128_t o) { m_data &= o; return *this; }
-  Kmer<64>& operator|=(__uint128_t o) { m_data |= o; return *this; }
-  Kmer<64>& operator^=(__uint128_t o) { m_data ^= o; return *this; }
-
-  Kmer<64>& operator>>=(uint32_t shift) { m_data >>= shift; return *this; }
-  Kmer<64>& operator<<=(uint32_t shift) { m_data <<= shift; return *this; }
-
-  /***********************
-  *   Kmer operations    *
-  ***********************/
-
-  Kmer<64> rev_comp() const
-  {
-    const __uint128_t& value = m_data;
-    uint64_t high = static_cast<uint64_t>(value>>64);
-    int nb_high = m_kmer_size > 32 ? m_kmer_size - 32 : 0;
-
-    uint64_t rev_high = revcomp64(high, nb_high);
-
-    if (m_kmer_size <= 32) rev_high = 0;
-
-    uint64_t low = static_cast<uint64_t>((value & (((static_cast<__uint128_t>(1)) << 64) - 1)));
-    int nb_low = m_kmer_size > 32 ? 32 : m_kmer_size;
-    uint64_t rev_low = revcomp64(low, nb_low);
-
-    Kmer<64> res; res.set_k(m_kmer_size);
-    res.m_data = rev_low;
-    res.m_data <<= 2 * nb_high;
-    res.m_data += rev_high;
-    return res;
-  }
-
-  Kmer<64> canonical() const
-  {
-    Kmer<64> kmer = rev_comp();
-    return (kmer < *this) ? kmer : *this;
-  }
-
-  /***************************
-  *   Text representation    *
-  ***************************/
-
-  std::string to_string() const
-  {
-    char seq[65];
-    for (int i=m_kmer_size-1; i>=0; i--)
-        seq[m_kmer_size-i-1] = bToN[(*this)[i]];
-    seq[m_kmer_size]='\0';
-    return seq;
-  }
-
-  std::string to_bit_string() const
-  {
-    return std::bitset<sizeof(__uint128_t) * 8>(m_data).to_string();
-  }
-
-  /***************************
-  *   Stream methods         *
-  ***************************/
-
-  void dump(std::ostream& stream)
-  {
-    stream.write(reinterpret_cast<char*>(&m_data), sizeof(uint64_t));
-  }
-
-  void load(std::istream& stream)
-  {
-    stream.read(reinterpret_cast<char*>(&m_data), sizeof(uint64_t));
-  }
-
-  std::vector<Mmer> mmers(uint8_t size) const
-  {
-    const size_t nb_mmers = m_kmer_size - size + 1;
-    std::vector<Mmer> mmers(nb_mmers);
-    for (size_t i=0; i<nb_mmers; i++)
-    {
-      uint32_t value = 0;
-      for (size_t j=i; j<i+size; j++)
-      {
-        value <<= 2;
-        value |= byte_at(j);
-      }
-      mmers[i].set(value, size);
-    }
-    return mmers;
-  }
-
-  Mmer minimizer(uint8_t size)
-  {
-    uint32_t def = ((uint64_t)1 << (2*size)) - 1;
-    const size_t nb_mmers = m_kmer_size - size + 1;
-    Mmer minim(std::numeric_limits<uint32_t>::max(), size);
-    for (size_t i=0; i<nb_mmers; i++)
-    {
-      uint32_t value = 0;
-      for (size_t j=i; j<i+size; j++)
-      {
-        value <<= 2;
-        value |= byte_at(j);
-      }
-      uint32_t rev = 0;
-      uint32_t tmp = value;
-      for (int j=size-1; j>=0; j--)
-      {
-        rev <<= 2;
-        rev |= revB[tmp & 3];
-        tmp >>= 2;
-      }
-      //Mmer tmp_minim(value, size);
-      Mmer tmp_minim(rev < value ? rev : value, size);
-      if (is_valid_minimizer(tmp_minim.value(), size))
-      {
-        if (tmp_minim < minim)
-          minim = tmp_minim;
-      }
-      else
-      {
-        tmp_minim = Mmer(def, size);
-        if (tmp_minim < minim)
-        {
-          minim = tmp_minim;
-        }
-      }
-    }
-    return minim;
-  }
-protected:
-  __uint128_t m_data;
 };
 
 /**
@@ -1212,7 +809,5 @@ public:
 private:
   count_type m_count;
 };
-
-#endif
 
 };  // namespace kmdiff

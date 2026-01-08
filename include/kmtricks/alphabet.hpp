@@ -17,22 +17,48 @@
  *****************************************************************************/
 
 #pragma once
-#include <kmtricks/kmer.hpp>
+
+#include <cstdint>
+#include <string>
+
+#include <kmtricks/exceptions.hpp>
 
 namespace km {
 
-template<size_t MAX_K>
-class Minimizer
+enum class Alphabet : uint8_t
 {
-public:
-  Minimizer(Kmer<MAX_K>& kmer, uint8_t size)
-    : m_mmer(kmer.minimizer(size))
-  {}
-
-  uint64_t value () const { return m_mmer.value(); }
-  std::string str() const { return m_mmer.to_string(); }
-private:
-  Mmer m_mmer;
+  DNA = 0,
+  PROTEIN = 1
 };
 
-};
+inline Alphabet alphabet_from_string(const std::string& value)
+{
+  if (value == "dna")
+    return Alphabet::DNA;
+  if (value == "protein")
+    return Alphabet::PROTEIN;
+  throw ConfigError("Unknown alphabet: " + value);
+}
+
+inline std::string alphabet_to_string(Alphabet alphabet)
+{
+  return alphabet == Alphabet::DNA ? "dna" : "protein";
+}
+
+inline uint8_t alphabet_bits(Alphabet alphabet)
+{
+  return alphabet == Alphabet::DNA ? 2 : 5;
+}
+
+inline Alphabet alphabet_from_id(uint8_t id)
+{
+  return id == 0 ? Alphabet::DNA : Alphabet::PROTEIN;
+}
+
+inline uint32_t kmer_slots(uint32_t kmer_size, Alphabet alphabet)
+{
+  const uint32_t bits = kmer_size * alphabet_bits(alphabet);
+  return static_cast<uint32_t>((bits + 63) / 64);
+}
+
+}  // namespace km

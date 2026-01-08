@@ -62,18 +62,18 @@ public:
   template<size_t MAX_K>
   uint16_t get_partition(const Minimizer<MAX_K>& minim) const
   {
-    return m_repart_table[minim.value()];
+    return m_repart_table[static_cast<size_t>(minim.value())];
   }
 
-  uint16_t get_partition(uint32_t value) const
+  uint16_t get_partition(uint64_t value) const
   {
-    return m_repart_table[value];
+    return m_repart_table[static_cast<size_t>(value)];
   }
 
   template<size_t MAX_K>
   uint16_t get_freq_order(const Minimizer<MAX_K>& minim) const
   {
-    return m_freq_table[minim.value()];
+    return m_freq_table[static_cast<size_t>(minim.value())];
   }
 
   uint16_t get_nb_minimizers() const
@@ -88,7 +88,7 @@ public:
       outs.push_back(std::ofstream(p, std::ios::out));
 
     for (size_t i=0; i<m_repart_table.size(); i++)
-      outs[m_repart_table[i]] << Mmer(i, size).to_string() << "\n";
+      outs[m_repart_table[i]] << Mmer(i, size, Alphabet::DNA).to_string() << "\n";
   }
 
   const std::vector<uint16_t>& table() const

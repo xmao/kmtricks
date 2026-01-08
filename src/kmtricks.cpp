@@ -24,6 +24,7 @@
 #include <kmtricks/cmd.hpp>
 #include <kmtricks/cli.hpp>
 #include <kmtricks/signals.hpp>
+#include <kmtricks/alphabet.hpp>
 
 #include <kmtricks/loop_executor.hpp>
 

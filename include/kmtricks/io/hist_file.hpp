@@ -86,10 +86,12 @@ class HistWriter : public IFile<HistFileHeader, std::ostream, buf_size>
 {
   using ocstream = lz4_stream::basic_ostream<buf_size>;
 public:
-  HistWriter(const std::string& path, KHist& hist, bool lz4)
+  HistWriter(const std::string& path, KHist& hist, bool lz4, Alphabet alphabet = Alphabet::DNA)
     : IFile<HistFileHeader, std::ostream, buf_size>(path, std::ios::out | std::ios::binary)
   {
     this->m_header.compressed = lz4;
+    this->m_header.alphabet_id = static_cast<uint8_t>(alphabet);
+    this->m_header.alphabet_bits_per_symbol = alphabet_bits(alphabet);
     this->m_header.kmer_size = hist.m_ksize;
     this->m_header.id = hist.m_idx;
     this->m_header.lower = hist.m_lower;

@@ -33,6 +33,8 @@
 #include <cstdlib>
 #include <sys/resource.h>
 
+#include <kmtricks/kmer.hpp>
+
 namespace fs = std::filesystem;
 
 #if __APPLE__
@@ -118,7 +120,7 @@ void set_bit_vector(std::vector<uint8_t>& bit_vec, const std::vector<T>& count_v
 template<size_t MAX_K>
 uint64_t get_required_memory(size_t nb_kmers)
 {
-  return nb_kmers * (((MAX_K + 31) / 32) * 8) + 8192;
+  return nb_kmers * (Kmer<MAX_K>::m_max_data * 8) + 8192;
 }
 
 template<size_t MAX_K>

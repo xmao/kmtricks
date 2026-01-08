@@ -33,6 +33,7 @@
 
 /.vscode/
 /build/
+/build-system/
 /tests/tests_tmp/
 /bin/
 /tests/cmd_tests/km_dir

@@ -26,3 +26,4 @@
 #include <kmtricks/io/vector_file.hpp>
 #include <kmtricks/io/vector_matrix_file.hpp>
 #include <kmtricks/io/hist_file.hpp>
+#include <kmtricks/io/kff_file.hpp>

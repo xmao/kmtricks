@@ -65,10 +65,13 @@ class BitVectorWriter : public IFile<BitVectorFileHeader, std::ostream, buf_size
 {
   using ocstream = lz4_stream::basic_ostream<buf_size>;
 public:
-  BitVectorWriter(const std::string& path, uint64_t bits, uint32_t id, uint32_t partition, bool lz4)
+  BitVectorWriter(const std::string& path, uint64_t bits, uint32_t id, uint32_t partition, bool lz4,
+                  Alphabet alphabet = Alphabet::DNA)
     : IFile<BitVectorFileHeader, std::ostream, buf_size>(path, std::ios::out | std::ios::binary)
   {
     this->m_header.compressed = lz4;
+    this->m_header.alphabet_id = static_cast<uint8_t>(alphabet);
+    this->m_header.alphabet_bits_per_symbol = alphabet_bits(alphabet);
     this->m_header.bits = bits;
     this->m_header.id = id;
     this->m_header.partition = partition;

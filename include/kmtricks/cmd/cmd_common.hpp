@@ -243,6 +243,7 @@ struct km_options
   std::string verbosity{};
   int nb_threads{1};
   std::string dir;
+  std::string alphabet{"dna"};
 
   std::string global_display()
   {
@@ -251,6 +252,7 @@ struct km_options
     RECORD(ss, dir);
     RECORD(ss, verbosity);
     RECORD(ss, nb_threads);
+    RECORD(ss, alphabet);
     return ss.str();
   }
 };
