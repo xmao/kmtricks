@@ -65,6 +65,10 @@ enum class ProteinOutput
   VECTOR
 };
 
+// Histogram configuration
+constexpr uint32_t HIST_MIN_COUNT = 1;
+constexpr uint32_t HIST_MAX_COUNT = 255;
+
 struct ProteinMask
 {
   size_t full_words {0};
@@ -496,7 +500,7 @@ inline void run_protein_all(all_options_t opt)
   std::vector<hist_t> hists;
   hists.resize(KmDir::get().m_fof.size(), nullptr);
   for (size_t i = 0; i < KmDir::get().m_fof.size(); ++i)
-    hists[i] = opt->hist ? std::make_shared<KHist>(i, opt->kmer_size, 1, 255) : nullptr;
+    hists[i] = opt->hist ? std::make_shared<KHist>(i, opt->kmer_size, HIST_MIN_COUNT, HIST_MAX_COUNT) : nullptr;
 
   const ProteinOutput output = opt->count_format == COUNT_FORMAT::HASH
     ? ProteinOutput::HASH
@@ -611,7 +615,7 @@ inline void run_protein_count(count_options_t opt)
 
   const uint32_t sample_idx = KmDir::get().m_fof.get_i(opt->id);
   const std::string files = KmDir::get().m_fof.get_files(opt->id);
-  hist_t hist = opt->hist ? std::make_shared<KHist>(sample_idx, config._kmerSize, 1, 255) : nullptr;
+  hist_t hist = opt->hist ? std::make_shared<KHist>(sample_idx, config._kmerSize, HIST_MIN_COUNT, HIST_MAX_COUNT) : nullptr;
 
   ProteinCountTask<MAX_K, MAX_C> task(opt->id,
                                       sample_idx,
