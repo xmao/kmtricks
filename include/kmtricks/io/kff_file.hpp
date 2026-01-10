@@ -183,8 +183,8 @@ private:
 
   void u8from16(uint8_t b[2], uint16_t u16)
   {
-    b[1] = (uint8_t)(u16>>=8);
-    b[0] = (uint8_t)(u16>>=8);
+    b[1] = (uint8_t)u16;
+    b[0] = (uint8_t)(u16 >> 8);
   }
 
 private:
