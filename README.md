@@ -55,8 +55,9 @@ kmtricks pipeline --alphabet dna --fof samples.txt --run-dir output [other optio
 
 **Note:** Protein k-mers use 5 bits per amino acid (vs 2 bits for DNA), resulting in larger memory requirements and file sizes for the same k-mer size.
 
-**Limitations:**
-* Protein sequences do not use super-k-mer optimization (no minimizers without canonical k-mers)
+**Technical details:**
+* Protein sequences use **hash-based minimizers** for super-k-mer extraction (no canonical form needed)
+* Super-k-mer optimization provides memory efficiency even without reverse complements
 * KFF format for protein uses a kmtricks-specific encoding (KFFP format) rather than the standard KFF v1 spec
 
 ## Installation and usage
