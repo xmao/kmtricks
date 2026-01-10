@@ -233,8 +233,9 @@ public:
   {
     if (m_current_section) m_current_section->close();
     m_current_section = std::make_unique<Section_Minimizer>(m_kff_file.get());
-    uint8_t minim[minimizer.size()]; encode_sequence(minimizer, minim);
-    m_current_section->write_minimizer(minim);
+    std::vector<uint8_t> minim(minimizer.size());
+    encode_sequence(minimizer, minim.data());
+    m_current_section->write_minimizer(minim.data());
     m_current_minim = minimizer;
   }
 
@@ -252,9 +253,9 @@ public:
 
   void write(const std::string& superk, size_t minim_pos, std::vector<uint8_t>& vcount)
   {
-    uint8_t seq[superk.size()];
-    encode_sequence(superk, seq);
-    m_current_section->write_compacted_sequence(seq, superk.size(), minim_pos, vcount.data());
+    std::vector<uint8_t> seq(superk.size());
+    encode_sequence(superk, seq.data());
+    m_current_section->write_compacted_sequence(seq.data(), superk.size(), minim_pos, vcount.data());
   }
 
   void encode_sequence(const std::string& superk, uint8_t* encoded)
