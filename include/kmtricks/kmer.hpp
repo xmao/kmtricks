@@ -810,4 +810,4 @@ private:
   count_type m_count;
 };
 
-};  // namespace kmdiff
+};  // namespace km
