@@ -625,7 +625,9 @@ class MatrixMerger
 
       private:
 
-        // TODO This is only temporary for testing, we have to use bit packing
+        // Copy presence/absence bit vector into current data at specified position.
+        // Note: Potential future optimization using memcpy for byte-aligned regions,
+        // but current bit-by-bit approach is correct and works for both DNA/protein.
         void copy_pa_vec(std::size_t start, std::size_t n, const data_type& data)
         {
           std::size_t j = 0;

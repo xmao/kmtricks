@@ -33,6 +33,33 @@ Note: for counting kmers from a single file, kmtricks works but is slightly slow
   * In this case, this matrix is provided vertically (one column is a bloom filter corresponding to one dataset).
   * After transposition, this matrix may also be provided horizontally (one line is a Bloom filter corresponding to one dataset). This enables to provide efficiently an independent Bloom filter per input read file.
 
+## Protein Support
+
+kmtricks now supports both **DNA** and **protein** sequences via the `--alphabet` flag. This enables k-mer analysis of protein sequences using the same efficient pipeline.
+
+**Key features:**
+* Process protein sequences with 20 standard amino acids (ACDEFGHIKLMNPQRSTVWY)
+* All modes supported: `all`, `repart`, `superk`, `count`, `merge`, `dump`, `aggregate`, `filter`, `combine`
+* All output formats supported: `kmer`, `hash`, `vector`, `kff`
+* Automatic alphabet validation prevents mixing DNA and protein data
+* Alphabet information is persisted in file headers for compatibility checking
+
+**Usage:**
+```bash
+# For protein sequences
+kmtricks pipeline --alphabet protein --fof samples.txt --run-dir output [other options]
+
+# For DNA sequences (default)
+kmtricks pipeline --alphabet dna --fof samples.txt --run-dir output [other options]
+```
+
+**Note:** Protein k-mers use 5 bits per amino acid (vs 2 bits for DNA), resulting in larger memory requirements and file sizes for the same k-mer size.
+
+**Technical details:**
+* Protein sequences use **hash-based minimizers** for super-k-mer extraction (no canonical form needed)
+* Super-k-mer optimization provides memory efficiency even without reverse complements
+* KFF format for protein uses a kmtricks-specific encoding (KFFP format) rather than the standard KFF v1 spec
+
 ## Installation and usage
 
 Instructions for installation and usage are provided in the [wiki](https://github.com/tlemane/kmtricks/wiki/Home).

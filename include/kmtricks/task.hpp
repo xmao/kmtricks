@@ -651,6 +651,7 @@ public:
       plugin->set_out_dir(KmDir::get().m_plugin_storage);
       plugin->set_kmer_size(m_kmer_size);
       plugin->set_partition(m_part_id);
+      plugin->set_alphabet(Kmer<MAX_K>::alphabet());
       merger.set_plugin(plugin);
     }
 #endif
@@ -749,6 +750,7 @@ public:
       plugin->set_out_dir(KmDir::get().m_plugin_storage);
       plugin->set_kmer_size(0);
       plugin->set_partition(m_part_id);
+      plugin->set_alphabet(Kmer<MAX_K>::alphabet());
       merger.set_plugin(plugin);
     }
 #endif

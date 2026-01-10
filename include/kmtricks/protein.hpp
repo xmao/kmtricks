@@ -44,6 +44,7 @@
 #include <kmtricks/io/hash_file.hpp>
 #include <kmtricks/io/kff_file.hpp>
 #include <kmtricks/io/kmer_file.hpp>
+#include <kmtricks/io/superk_storage.hpp>
 #include <kmtricks/io/vector_file.hpp>
 #include <kmtricks/kmer.hpp>
 #include <kmtricks/kmer_hash.hpp>
@@ -64,6 +65,10 @@ enum class ProteinOutput
   HASH,
   VECTOR
 };
+
+// Histogram configuration
+constexpr uint32_t HIST_MIN_COUNT = 1;
+constexpr uint32_t HIST_MAX_COUNT = 255;
 
 struct ProteinMask
 {
@@ -168,7 +173,8 @@ public:
                    ProteinOutput output,
                    const std::vector<uint32_t>& partitions,
                    uint64_t hash_window,
-                   hist_t hist)
+                   hist_t hist,
+                   bool clear = true)
     : ITask(3),
       m_sample_id(sample_id),
       m_sample_idx(sample_idx),
@@ -180,7 +186,8 @@ public:
       m_output(output),
       m_partitions(partitions),
       m_hash_window(hash_window),
-      m_hist(hist)
+      m_hist(hist),
+      m_clear(clear)
   {
     m_part_mask.assign(m_nb_parts, false);
     for (auto part : m_partitions)
@@ -261,7 +268,8 @@ public:
         write_kmer_partition(part, temp_paths[part], record_size);
       else
         write_hash_partition(part, temp_paths[part]);
-      fs::remove(temp_paths[part]);
+      if (m_clear)
+        fs::remove(temp_paths[part]);
     }
 
     spdlog::debug("[done] - ProteinCountTask - S={}", m_sample_id);
@@ -436,6 +444,7 @@ private:
   uint32_t m_nb_parts;
   uint32_t m_ab_min;
   bool m_lz4;
+  bool m_clear;
   ProteinOutput m_output;
   std::vector<uint32_t> m_partitions;
   std::vector<bool> m_part_mask;
@@ -492,7 +501,7 @@ inline void run_protein_all(all_options_t opt)
   std::vector<hist_t> hists;
   hists.resize(KmDir::get().m_fof.size(), nullptr);
   for (size_t i = 0; i < KmDir::get().m_fof.size(); ++i)
-    hists[i] = opt->hist ? std::make_shared<KHist>(i, opt->kmer_size, 1, 255) : nullptr;
+    hists[i] = opt->hist ? std::make_shared<KHist>(i, opt->kmer_size, HIST_MIN_COUNT, HIST_MAX_COUNT) : nullptr;
 
   const ProteinOutput output = opt->count_format == COUNT_FORMAT::HASH
     ? ProteinOutput::HASH
@@ -607,7 +616,7 @@ inline void run_protein_count(count_options_t opt)
 
   const uint32_t sample_idx = KmDir::get().m_fof.get_i(opt->id);
   const std::string files = KmDir::get().m_fof.get_files(opt->id);
-  hist_t hist = opt->hist ? std::make_shared<KHist>(sample_idx, config._kmerSize, 1, 255) : nullptr;
+  hist_t hist = opt->hist ? std::make_shared<KHist>(sample_idx, config._kmerSize, HIST_MIN_COUNT, HIST_MAX_COUNT) : nullptr;
 
   ProteinCountTask<MAX_K, MAX_C> task(opt->id,
                                       sample_idx,
@@ -619,7 +628,8 @@ inline void run_protein_count(count_options_t opt)
                                       output,
                                       partitions,
                                       hash_window,
-                                      hist);
+                                      hist,
+                                      opt->clear);
   task.preprocess();
   task.exec();
   task.postprocess();
@@ -649,7 +659,124 @@ template<size_t MAX_K>
 inline void run_protein_superk(superk_options_t opt)
 {
   KmDir::get().init(opt->dir, "", false);
-  spdlog::info("Protein super-k-mer generation is not used; skipping.");
+
+  Storage* config_storage = StorageFactory(STORAGE_FILE).load(KmDir::get().m_config_storage);
+  LOCAL(config_storage);
+  Configuration config = Configuration();
+  config.load(config_storage->getGroup("gatb"));
+
+  // Protein super-k-mers use hash-based minimizers (no canonical form needed)
+  // Extract k-mers grouped by minimizer for memory efficiency
+  Kmer<MAX_K>::set_alphabet(Alphabet::PROTEIN);
+
+  const std::string& sample_id = opt->id;
+  const std::string files = KmDir::get().m_fof.get_files(sample_id);
+  const uint32_t kmer_size = config._kmerSize;
+  const uint32_t minim_size = config._minim_size;
+
+  spdlog::info("Generating protein super-k-mers for {} (k={}, m={})", sample_id, kmer_size, minim_size);
+
+  // Open output storage for super-k-mers (partitioned by minimizer hash)
+  std::unordered_set<int> all_partitions;
+  for (uint32_t p = 0; p < config._nb_partitions; ++p)
+    all_partitions.insert(p);
+
+  SuperKStorageWriter* writer = new SuperKStorageWriter(
+    KmDir::get().get_superk_path(sample_id), "pskp", config._nb_partitions, opt->lz4, all_partitions);
+
+  // Process sequences and extract super-k-mers
+  for_each_sequence(files, [&](const char* data, size_t len) {
+    if (len < kmer_size) return;
+
+    // Build k-mers and track minimizers
+    std::vector<Kmer<MAX_K>> kmers;
+    std::vector<uint64_t> minimizers;
+
+    Kmer<MAX_K> kmer;
+    kmer.set_k(kmer_size);
+    const uint8_t bits = Kmer<MAX_K>::bits_per_symbol();
+    ProteinMask mask = make_kmer_mask(kmer_size, bits);
+
+    kmer.zero();
+    size_t filled = 0;
+
+    for (size_t i = 0; i < len; ++i)
+    {
+      const uint8_t code = char_to_code(Alphabet::PROTEIN, static_cast<unsigned char>(data[i]));
+      kmer = (kmer << bits) + static_cast<uint64_t>(code);
+
+      if (filled < kmer_size)
+      {
+        filled++;
+        if (filled < kmer_size) continue;
+      }
+
+      apply_kmer_mask(kmer, mask);
+      Mmer minim = kmer.minimizer(minim_size);
+
+      kmers.push_back(kmer);
+      minimizers.push_back(minim.value());
+    }
+
+    // Group k-mers by consecutive minimizers to form super-k-mers
+    if (kmers.empty()) return;
+
+    size_t start = 0;
+    for (size_t i = 1; i <= kmers.size(); ++i)
+    {
+      // Check if minimizer changed or reached end
+      if (i == kmers.size() || minimizers[i] != minimizers[start])
+      {
+        // Write super-k-mer for range [start, i)
+        const uint32_t part = static_cast<uint32_t>(minimizers[start] % config._nb_partitions);
+        const size_t superk_len = i - start + kmer_size - 1;
+        const uint8_t nbk = static_cast<uint8_t>(i - start);
+
+        // Encode super-k-mer: for protein, use 5 bits per AA
+        // Calculate bytes needed
+        const size_t total_bits = superk_len * 5;
+        const size_t nb_bytes = (total_bits + 7) / 8;
+        std::vector<uint8_t> encoded(nb_bytes, 0);
+
+        // Encode the super-k-mer sequence
+        size_t bit_pos = 0;
+        // First k-mer
+        for (size_t j = 0; j < kmer_size; ++j)
+        {
+          const uint8_t code = char_to_code(Alphabet::PROTEIN, kmers[start].at(j));
+          // Pack 5 bits into encoded buffer
+          for (int b = 4; b >= 0; --b)
+          {
+            if (code & (1 << b))
+              encoded[bit_pos / 8] |= (1 << (7 - (bit_pos % 8)));
+            bit_pos++;
+          }
+        }
+
+        // Remaining bases (last base of each subsequent k-mer)
+        for (size_t j = start + 1; j < i; ++j)
+        {
+          const uint8_t code = char_to_code(Alphabet::PROTEIN, kmers[j].at(kmer_size - 1));
+          for (int b = 4; b >= 0; --b)
+          {
+            if (code & (1 << b))
+              encoded[bit_pos / 8] |= (1 << (7 - (bit_pos % 8)));
+            bit_pos++;
+          }
+        }
+
+        // Write to appropriate partition
+        writer->insertSuperkmer(encoded.data(), nb_bytes, nbk, part);
+
+        start = i;
+      }
+    }
+  });
+
+  // Cleanup
+  delete writer;
+
+  spdlog::info("Protein super-k-mer generation complete for {}", sample_id);
 }
 
 } // namespace km
