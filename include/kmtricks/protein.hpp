@@ -168,7 +168,8 @@ public:
                    ProteinOutput output,
                    const std::vector<uint32_t>& partitions,
                    uint64_t hash_window,
-                   hist_t hist)
+                   hist_t hist,
+                   bool clear = true)
     : ITask(3),
       m_sample_id(sample_id),
       m_sample_idx(sample_idx),
@@ -180,7 +181,8 @@ public:
       m_output(output),
       m_partitions(partitions),
       m_hash_window(hash_window),
-      m_hist(hist)
+      m_hist(hist),
+      m_clear(clear)
   {
     m_part_mask.assign(m_nb_parts, false);
     for (auto part : m_partitions)
@@ -261,7 +263,8 @@ public:
         write_kmer_partition(part, temp_paths[part], record_size);
       else
         write_hash_partition(part, temp_paths[part]);
-      fs::remove(temp_paths[part]);
+      if (m_clear)
+        fs::remove(temp_paths[part]);
     }
 
     spdlog::debug("[done] - ProteinCountTask - S={}", m_sample_id);
@@ -436,6 +439,7 @@ private:
   uint32_t m_nb_parts;
   uint32_t m_ab_min;
   bool m_lz4;
+  bool m_clear;
   ProteinOutput m_output;
   std::vector<uint32_t> m_partitions;
   std::vector<bool> m_part_mask;
@@ -619,7 +623,8 @@ inline void run_protein_count(count_options_t opt)
                                       output,
                                       partitions,
                                       hash_window,
-                                      hist);
+                                      hist,
+                                      opt->clear);
   task.preprocess();
   task.exec();
   task.postprocess();
